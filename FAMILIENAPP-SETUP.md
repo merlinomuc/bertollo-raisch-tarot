@@ -1,4 +1,4 @@
-# Bertollo–Raisch Tarot Familien-App 1.3.7
+# Bertollo–Raisch Tarot Familien-App 1.3.9
 
 ## Neue Funktionen
 
@@ -12,7 +12,7 @@
 - installierbare PWA für Smartphone und Tablet
 - bestehende MCP-/ChatGPT-App bleibt unter `/mcp` erhalten
 - Chrome und Edge nutzen die integrierte Browser-Spracherkennung
-- Firefox nimmt Audio lokal auf und sendet nur diese bewusste Aufnahme zur OpenAI-Transkription
+- Firefox und Android nehmen Audio lokal auf und senden nur diese bewusst gestartete Aufnahme zur OpenAI-Transkription
 
 ## Render-Umgebungsvariablen
 
@@ -37,7 +37,7 @@ Der API-Schlüssel darf niemals in GitHub oder in eine Browserdatei kopiert werd
 5. `Legung deuten` drücken.
 6. Prüfen, dass die Deutung unter den Karten erscheint.
 7. In Chrome/Edge Mikrofon testen: Browser-Spracherkennung muss starten.
-8. In Firefox Mikrofon testen: Aufnahme mit ■ beenden; danach muss der transkribierte Text erscheinen.
+8. In Firefox oder auf Android Mikrofon testen: Aufnahme mit ■ beenden; danach muss der transkribierte Text erscheinen.
 
 ## PWA installieren
 
