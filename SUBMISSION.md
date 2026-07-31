@@ -23,7 +23,7 @@
 
 ## Kurzbeschreibung
 
-Interaktive deutschsprachige Tarot-App mit 78 eigenen Kartenmotiven, fünf Legungsarten und der Möglichkeit, physisch gelegte Karten einzugeben. Die Deutung erfolgt im aktuellen ChatGPT-Gespräch und wird als nicht-deterministischer Impuls zur Selbstreflexion formuliert.
+Interaktive deutschsprachige Tarot-App mit 78 eigenen Kartenmotiven, sechs Legungsarten und der Möglichkeit, physisch gelegte Karten einzugeben. Die Deutung erfolgt im aktuellen ChatGPT-Gespräch und wird als nicht-deterministischer Impuls zur Selbstreflexion formuliert.
 
 ## Ausführliche Beschreibung
 
@@ -42,7 +42,7 @@ Bertollo–Raisch Tarot bietet eine visuelle Tarotoberfläche direkt in ChatGPT.
 1. `tools/list` liefert `open_tarot_app` und `tarot_app_help`.
 2. `tools/call open_tarot_app` liefert die UI-Ressource `ui://widget/bertollo-raisch-tarot-v1.html`.
 3. `resources/read` liefert HTML mit MIME-Typ `text/html;profile=mcp-app`.
-4. Auf der Startseite erscheinen genau fünf Legungsarten.
+4. Auf der Startseite erscheinen genau sechs Legungsarten.
 5. Tageskarte zieht genau eine Karte.
 6. Ja/Nein zieht genau drei eindeutige Karten.
 7. Kleines Kreuz zieht fünf eindeutige Karten.

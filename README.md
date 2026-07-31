@@ -76,7 +76,7 @@ Während der Entwicklung kann jedes berechtigte Familienmitglied den gleichen ö
 - `public/widget.html` – vollständige eingebettete App-Oberfläche
 - `data/cards.json` – 78 Karten samt eingebetteter Bilder
 
-## Submission-Version 1.1.1
+## Submission-Version 1.2.0
 
 Öffentlicher Anbieter: **Bertollo**, Deutschland  
 Support: **tarot@bertollo.de**
