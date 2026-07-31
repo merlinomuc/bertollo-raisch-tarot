@@ -1,6 +1,6 @@
 {
   "name": "bertollo-raisch-chatgpt-app",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "express": "^5.1.0",
-    "zod": "^3.25.0"
+    "zod": "^3.25.0",
+    "openai": "^5.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
@@ -19,6 +20,6 @@
     "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   },
-  "description": "Deutschsprachige ChatGPT-Tarot-App mit 78 eigenen Kartenmotiven, sechs Legungsarten und Custom-GPT-Action.",
+  "description": "Grafische deutschsprachige Tarot-Familienapp mit 78 eigenen Karten, OpenAI-Deutung, MCP-App und PWA.",
   "license": "UNLICENSED"
 }

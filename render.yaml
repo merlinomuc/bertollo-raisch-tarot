@@ -4,4 +4,15 @@ services:
     runtime: node
     buildCommand: npm install
     startCommand: npm start
-    healthCheckPath: /
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: FAMILY_ACCESS_CODE
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: DAILY_IP_LIMIT
+        value: "20"
+      - key: MONTHLY_REQUEST_LIMIT
+        value: "300"

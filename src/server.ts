@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import OpenAI from "openai";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const widgetHtml = readFileSync(join(__dirname, "../public/widget.html"), "utf8");
@@ -15,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.2.0" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.3.0" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -53,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo–Raisch Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.2.0", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.3.0", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -89,12 +90,107 @@ app.use((_req, res, next) => {
 });
 app.use(express.json({ limit: "256kb" }));
 app.use(express.static(join(__dirname, "../public"), { index: false, maxAge: "1h" }));
-app.get("/", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/index.html")));
+app.get("/", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/app.html")));
 app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/privacy.html")));
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.2.0" }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.3.0", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+
+
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
+const FAMILY_ACCESS_CODE = process.env.FAMILY_ACCESS_CODE || "";
+const DAILY_IP_LIMIT = Math.max(1, Number(process.env.DAILY_IP_LIMIT || 20));
+const MONTHLY_REQUEST_LIMIT = Math.max(1, Number(process.env.MONTHLY_REQUEST_LIMIT || 300));
+const usageByIp = new Map<string, { day: string; count: number }>();
+let monthlyUsage = { month: new Date().toISOString().slice(0, 7), count: 0 };
+
+function clientIp(req: express.Request) {
+  return String(req.ip || req.socket.remoteAddress || "unknown");
+}
+
+function checkFamilyAccess(req: express.Request, res: express.Response) {
+  if (!FAMILY_ACCESS_CODE) return true;
+  const supplied = String(req.get("X-Family-Code") || "");
+  if (supplied !== FAMILY_ACCESS_CODE) {
+    res.status(401).json({ error: "Familiencode fehlt oder ist falsch." });
+    return false;
+  }
+  return true;
+}
+
+function consumeUsage(req: express.Request, res: express.Response) {
+  const now = new Date();
+  const day = now.toISOString().slice(0, 10);
+  const month = now.toISOString().slice(0, 7);
+  if (monthlyUsage.month !== month) monthlyUsage = { month, count: 0 };
+  if (monthlyUsage.count >= MONTHLY_REQUEST_LIMIT) {
+    res.status(429).json({ error: "Das monatliche Familienkontingent ist erreicht." });
+    return false;
+  }
+  const ip = clientIp(req);
+  const entry = usageByIp.get(ip);
+  const current = entry?.day === day ? entry : { day, count: 0 };
+  if (current.count >= DAILY_IP_LIMIT) {
+    res.status(429).json({ error: "Das Tageslimit für diesen Zugang ist erreicht." });
+    return false;
+  }
+  current.count += 1;
+  usageByIp.set(ip, current);
+  monthlyUsage.count += 1;
+  return true;
+}
+
+const interpretationInstructions = `Du bist Bertollo–Raisch Tarot, ein erfahrener deutschsprachiger Tarot-Interpreter mit psychologisch tiefer, intuitiver und strukturierter Deutungsweise.
+
+Deute präzise, nachvollziehbar, ehrlich und psychologisch fundiert. Keine Wunschdeutung, keine unbegründete Spekulation, keine unnötige Esoterik, keine Angstmacherei und keine Garantien. Alle Karten werden ausschließlich aufrecht verwendet. Leite jede Aussage aus Frage, Position und Zusammenspiel der Karten ab. Stelle Gedanken oder Gefühle anderer Menschen nie als Tatsachen dar. Bei mehreren Lesarten nenne zuerst die wahrscheinlichste und danach nur sinnvolle Alternativen.
+
+Untersuche, soweit durch die Karten gestützt: äußere Ereignisse, innere Prozesse, Schutzmauern, emotionale Blockaden, Beziehungsmuster, Projektionen, unausgesprochene Gefühle, Entwicklungspotenzial und wahrscheinliche Tendenz. Nimm niemals automatisch eine dritte Person an. Keine exakten Zeitversprechen.
+
+Tarot dient Unterhaltung und Selbstreflexion. Keine medizinischen, psychotherapeutischen, rechtlichen oder finanziellen Entscheidungen vorgeben. Behaupte Schwangerschaft, Krankheit, Untreue, Trennung, Tod oder Katastrophen nie als sichere Tatsache.
+
+Strukturiere die Antwort passend zur Legung mit Überschriften. Deute zuerst jede Position, dann das Zusammenspiel. Jede vollständige Deutung endet exakt mit den Abschnitten: Kernaussage, Essenz, Reflexionsfrage und Sinnvolle Folgefrage. Formuliere genau eine Folgefrage.`;
+
+app.post("/api/interpret", async (req, res) => {
+  if (!checkFamilyAccess(req, res)) return;
+  if (!openai) return res.status(503).json({ error: "Die OpenAI-Verbindung ist noch nicht eingerichtet." });
+  const spread = typeof req.body?.spread === "string" ? req.body.spread.slice(0, 30) : "custom";
+  const spreadTitle = typeof req.body?.spread_title === "string" ? req.body.spread_title.slice(0, 120) : "Tarotlegung";
+  const question = typeof req.body?.question === "string" ? req.body.question.trim().slice(0, 2000) : "";
+  const rawCards = Array.isArray(req.body?.cards) ? req.body.cards : [];
+  if (rawCards.length < 1 || rawCards.length > 20) return res.status(400).json({ error: "Bitte 1 bis 20 Karten übergeben." });
+  const cardsForPrompt: Array<{ position: string; name: string }> = [];
+  for (let i = 0; i < rawCards.length; i++) {
+    const name = typeof rawCards[i]?.name === "string" ? rawCards[i].name.trim().slice(0, 100) : "";
+    const position = typeof rawCards[i]?.position === "string" ? rawCards[i].position.trim().slice(0, 150) : `Position ${i + 1}`;
+    if (!name) return res.status(400).json({ error: `Bei Position ${i + 1} fehlt der Kartenname.` });
+    cardsForPrompt.push({ position, name });
+  }
+  if (!consumeUsage(req, res)) return;
+  const userInput = `Legung: ${spreadTitle} (${spread})\nFrage/Thema: ${question || "Kein spezielles Thema"}\nAlle Karten sind aufrecht.\n\nKarten:\n${cardsForPrompt.map((c, i) => `${i + 1}. ${c.position}: ${c.name}`).join("\n")}\n\nErstelle jetzt die vollständige deutsche Deutung.`;
+  try {
+    const response = await openai.responses.create({
+      model: OPENAI_MODEL,
+      instructions: interpretationInstructions,
+      input: userInput,
+      max_output_tokens: 2800,
+    });
+    const interpretation = response.output_text?.trim();
+    if (!interpretation) throw new Error("Leere Modellantwort");
+    res.json({ interpretation, model: OPENAI_MODEL, usage: response.usage ?? null, storedByApp: false });
+  } catch (error: any) {
+    console.error("OpenAI interpretation failed", error?.status, error?.message);
+    res.status(error?.status === 429 ? 429 : 502).json({ error: error?.status === 429 ? "OpenAI-Nutzungslimit erreicht. Bitte später erneut versuchen." : "Die Deutung konnte gerade nicht erstellt werden." });
+  }
+});
+
+app.get("/api/usage", (req, res) => {
+  if (!checkFamilyAccess(req, res)) return;
+  const month = new Date().toISOString().slice(0, 7);
+  const used = monthlyUsage.month === month ? monthlyUsage.count : 0;
+  res.json({ month, used, limit: MONTHLY_REQUEST_LIMIT, dailyIpLimit: DAILY_IP_LIMIT });
+});
 
 const spreadPositions: Record<string, string[]> = {
   daily: ["Tagesimpuls"],
@@ -165,7 +261,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.2.0",
+      version: "1.3.0",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],
