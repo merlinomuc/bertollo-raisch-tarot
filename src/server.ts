@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const widgetHtml = readFileSync(join(__dirname, "../public/widget.html"), "utf8");
@@ -70,6 +72,7 @@ function createServer() {
 const app = express();
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Authorization");
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -77,24 +80,76 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "2mb" }));
 app.get("/", (_req, res) => res.type("text").send("Bertollo–Raisch Tarot MCP server. Endpoint: /mcp"));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.0.2" }));
+
+type SessionEntry = {
+  transport: StreamableHTTPServerTransport;
+  server: McpServer;
+};
+
+const sessions = new Map<string, SessionEntry>();
+
 app.post("/mcp", async (req, res) => {
-  const server = createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-    enableJsonResponse: true,
-  });
-  res.on("close", () => { transport.close(); server.close(); });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  try {
+    const sessionId = req.header("mcp-session-id") ?? undefined;
+    let entry = sessionId ? sessions.get(sessionId) : undefined;
+
+    if (!entry) {
+      if (sessionId || !isInitializeRequest(req.body)) {
+        return res.status(400).json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: "Bad Request: invalid or missing MCP session" },
+          id: req.body?.id ?? null,
+        });
+      }
+
+      const server = createServer();
+      let transport!: StreamableHTTPServerTransport;
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        enableJsonResponse: true,
+        onsessioninitialized: (newSessionId) => {
+          sessions.set(newSessionId, { transport, server });
+        },
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) sessions.delete(transport.sessionId);
+        void server.close();
+      };
+
+      await server.connect(transport);
+      entry = { transport, server };
+    }
+
+    await entry.transport.handleRequest(req, res, req.body);
+  } catch (error) {
+    console.error("MCP POST error", error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        jsonrpc: "2.0",
+        error: { code: -32603, message: "Internal MCP server error" },
+        id: req.body?.id ?? null,
+      });
+    }
+  }
 });
-app.get("/mcp", (_req, res) => {
-  res.setHeader("Allow", "POST, OPTIONS");
-  res.status(405).json({ error: "Use POST /mcp" });
-});
-app.delete("/mcp", (_req, res) => {
-  res.setHeader("Allow", "POST, OPTIONS");
-  res.status(405).json({ error: "Stateless server" });
-});
+
+async function handleSessionRequest(req: express.Request, res: express.Response) {
+  const sessionId = req.header("mcp-session-id") ?? undefined;
+  const entry = sessionId ? sessions.get(sessionId) : undefined;
+  if (!entry) {
+    return res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Invalid or missing MCP session" },
+      id: null,
+    });
+  }
+  await entry.transport.handleRequest(req, res);
+}
+
+app.get("/mcp", handleSessionRequest);
+app.delete("/mcp", handleSessionRequest);
 
 const port = Number(process.env.PORT || 8000);
 app.listen(port, "0.0.0.0", () => console.log(`Tarot MCP server listening on http://localhost:${port}/mcp`));
