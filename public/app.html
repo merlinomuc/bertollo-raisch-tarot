@@ -96,18 +96,48 @@ function interpret(){requestInterpretation(state.drawn,layouts[state.layout].tit
 function interpretOwn(){const validNames=new Set(CARDS.map(c=>c.name.toLowerCase()));const cards=state.ownCards.map((c,i)=>({name:c.name.trim(),position:c.position.trim()||`Position ${i+1}`}));if(cards.some(c=>!c.name)){setStatus('Bitte alle Kartennamen eintragen.',true);return}const invalid=cards.filter(c=>!validNames.has(c.name.toLowerCase()));if(invalid.length){setStatus('Unbekannte Karte: '+invalid.map(c=>esc(c.name)).join(', '),true);return}requestInterpretation(cards,'Eigene physische Legung')}
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 let activeRecognition=null;
-function voiceErrorText(code){return ({'not-allowed':'Mikrofonzugriff wurde nicht erlaubt. Bitte erlaube ihn in den Browser-Einstellungen.','service-not-allowed':'Die Spracheingabe ist in diesem Browser nicht freigegeben.','no-speech':'Es wurde keine Sprache erkannt. Bitte versuche es erneut.','audio-capture':'Es wurde kein verfügbares Mikrofon gefunden.','network':'Die Spracherkennung konnte den Sprachdienst nicht erreichen.','aborted':'Spracheingabe wurde beendet.'})[code]||'Die Spracheingabe konnte nicht gestartet werden.'}
-function showVoiceMessage(button,text,isError=true){const wrap=button.closest('.voice-field');let msg=wrap?.nextElementSibling;if(!msg||!msg.classList.contains('voice-feedback')){msg=document.createElement('div');msg.className='voice-feedback';wrap?.insertAdjacentElement('afterend',msg)}msg.className='voice-feedback '+(isError?'voice-error':'voice-hint');msg.textContent=text;if(!isError)setTimeout(()=>{if(msg?.isConnected)msg.remove()},2500)}
-function startVoiceInput(field,button){
+function voiceErrorText(code){return ({'not-allowed':'Mikrofonzugriff wurde blockiert. Setze die Mikrofonberechtigung für diese Website einmal zurück oder auf „Zulassen“.','service-not-allowed':'Die Spracheingabe ist in diesem Browser oder durch das Betriebssystem nicht freigegeben.','no-speech':'Es wurde keine Sprache erkannt. Bitte versuche es erneut.','audio-capture':'Es wurde kein verfügbares Mikrofon gefunden.','network':'Die Spracherkennung konnte den Sprachdienst nicht erreichen.','aborted':'Spracheingabe wurde beendet.'})[code]||'Die Spracheingabe konnte nicht gestartet werden.'}
+function showVoiceMessage(button,text,isError=true){const wrap=button.closest('.voice-field');let msg=wrap?.nextElementSibling;if(!msg||!msg.classList.contains('voice-feedback')){msg=document.createElement('div');msg.className='voice-feedback';wrap?.insertAdjacentElement('afterend',msg)}msg.className='voice-feedback '+(isError?'voice-error':'voice-hint');msg.textContent=text;if(!isError)setTimeout(()=>{if(msg?.isConnected)msg.remove()},3500)}
+async function requestMicrophonePermission(button){
+  if(!window.isSecureContext){showVoiceMessage(button,'Mikrofonzugriff ist nur über eine sichere HTTPS-Adresse möglich.');return false}
+  if(!navigator.mediaDevices?.getUserMedia){showVoiceMessage(button,'Dieser Browser kann den Mikrofonzugriff nicht aktiv anfordern.');return false}
+  try{
+    if(navigator.permissions?.query){
+      try{
+        const permission=await navigator.permissions.query({name:'microphone'});
+        if(permission.state==='denied'){
+          showVoiceMessage(button,'Mikrofon ist für diese Website bereits blockiert. Öffne die Website-Berechtigungen und stelle Mikrofon auf „Zulassen“ oder „Zurücksetzen“.');
+          return false
+        }
+      }catch{}
+    }
+    showVoiceMessage(button,'Bitte bestätige jetzt den Mikrofonzugriff im Browserdialog.',false);
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    stream.getTracks().forEach(track=>track.stop());
+    return true
+  }catch(error){
+    const name=error?.name||'';
+    if(name==='NotAllowedError'||name==='PermissionDeniedError')showVoiceMessage(button,'Der Mikrofonzugriff wurde abgelehnt oder ist bereits blockiert. Die App kann eine gespeicherte Blockierung nicht selbst aufheben.');
+    else if(name==='NotFoundError'||name==='DevicesNotFoundError')showVoiceMessage(button,'Es wurde kein Mikrofon gefunden.');
+    else if(name==='NotReadableError'||name==='TrackStartError')showVoiceMessage(button,'Das Mikrofon wird möglicherweise gerade von einer anderen App verwendet.');
+    else showVoiceMessage(button,'Der Mikrofonzugriff konnte nicht angefordert werden: '+(error?.message||name||'unbekannter Fehler'));
+    return false
+  }
+}
+async function startVoiceInput(field,button){
   if(!SpeechRecognition){showVoiceMessage(button,'Spracheingabe wird von diesem Browser nicht unterstützt. Nutze möglichst Chrome oder Edge.');return}
   if(activeRecognition){try{activeRecognition.abort()}catch{}activeRecognition=null}
+  button.disabled=true;button.textContent='…';button.title='Mikrofonberechtigung wird geprüft';
+  const allowed=await requestMicrophonePermission(button);
+  button.disabled=false;button.textContent='🎤';button.title='Text per Sprache eingeben';
+  if(!allowed)return;
   const recognition=new SpeechRecognition();activeRecognition=recognition;recognition.lang='de-DE';recognition.interimResults=true;recognition.continuous=false;recognition.maxAlternatives=1;
   const original=field.value.trimEnd();let finalText='';
   button.classList.add('listening');button.setAttribute('aria-pressed','true');button.title='Aufnahme beenden';button.textContent='■';field.focus();
   recognition.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const text=e.results[i][0].transcript.trim();if(e.results[i].isFinal)finalText+=(finalText?' ':'')+text;else interim+=(interim?' ':'')+text}const spoken=[finalText,interim].filter(Boolean).join(' ');field.value=original+(original&&spoken?' ':'')+spoken;field.dispatchEvent(new Event('input',{bubbles:true}))};
   recognition.onerror=e=>{if(e.error!=='aborted')showVoiceMessage(button,voiceErrorText(e.error))};
   recognition.onend=()=>{button.classList.remove('listening');button.setAttribute('aria-pressed','false');button.title='Text per Sprache eingeben';button.textContent='🎤';if(activeRecognition===recognition)activeRecognition=null;if(finalText)showVoiceMessage(button,'Sprache wurde übernommen.',false)};
-  try{recognition.start()}catch(e){showVoiceMessage(button,'Das Mikrofon konnte nicht gestartet werden.');recognition.onend()}
+  try{recognition.start()}catch(e){showVoiceMessage(button,'Das Mikrofon konnte trotz erteilter Berechtigung nicht gestartet werden.');recognition.onend()}
 }
 function installVoiceInputs(){
   document.querySelectorAll('#root textarea,#root input').forEach(field=>{
