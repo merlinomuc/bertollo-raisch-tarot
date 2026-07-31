@@ -1,4 +1,4 @@
-# Version 1.3.5
+# Version 1.3.6
 
 - Keltisches Kreuz stabilisiert.
 - Höheres Ausgabelimit für zehn Karten.

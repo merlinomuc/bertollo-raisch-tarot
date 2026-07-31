@@ -102,19 +102,13 @@ async function requestMicrophonePermission(button){
   if(!window.isSecureContext){showVoiceMessage(button,'Mikrofonzugriff ist nur über eine sichere HTTPS-Adresse möglich.');return false}
   if(!navigator.mediaDevices?.getUserMedia){showVoiceMessage(button,'Dieser Browser kann den Mikrofonzugriff nicht aktiv anfordern.');return false}
   try{
-    if(navigator.permissions?.query){
-      try{
-        const permission=await navigator.permissions.query({name:'microphone'});
-        if(permission.state==='denied'){
-          showVoiceMessage(button,'Mikrofon ist für diese Website bereits blockiert. Öffne die Website-Berechtigungen und stelle Mikrofon auf „Zulassen“ oder „Zurücksetzen“.');
-          return false
-        }
-      }catch{}
+    if(window.top!==window.self){
+      showVoiceMessage(button,'Die App läuft in einem eingebetteten Fenster. Dort kann der übergeordnete Anbieter den Mikrofonzugriff blockieren. Öffne die App direkt unter '+location.origin+'.');
+      return false
     }
     showVoiceMessage(button,'Bitte bestätige jetzt den Mikrofonzugriff im Browserdialog.',false);
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    stream.getTracks().forEach(track=>track.stop());
-    return true
+    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+    return stream
   }catch(error){
     const name=error?.name||'';
     if(name==='NotAllowedError'||name==='PermissionDeniedError')showVoiceMessage(button,'Der Mikrofonzugriff wurde abgelehnt oder ist bereits blockiert. Die App kann eine gespeicherte Blockierung nicht selbst aufheben.');
@@ -128,16 +122,18 @@ async function startVoiceInput(field,button){
   if(!SpeechRecognition){showVoiceMessage(button,'Spracheingabe wird von diesem Browser nicht unterstützt. Nutze möglichst Chrome oder Edge.');return}
   if(activeRecognition){try{activeRecognition.abort()}catch{}activeRecognition=null}
   button.disabled=true;button.textContent='…';button.title='Mikrofonberechtigung wird geprüft';
-  const allowed=await requestMicrophonePermission(button);
+  const permissionStream=await requestMicrophonePermission(button);
   button.disabled=false;button.textContent='🎤';button.title='Text per Sprache eingeben';
-  if(!allowed)return;
+  if(!permissionStream)return;
+  const stopPermissionStream=()=>{try{permissionStream.getTracks().forEach(track=>track.stop())}catch{}};
   const recognition=new SpeechRecognition();activeRecognition=recognition;recognition.lang='de-DE';recognition.interimResults=true;recognition.continuous=false;recognition.maxAlternatives=1;
   const original=field.value.trimEnd();let finalText='';
   button.classList.add('listening');button.setAttribute('aria-pressed','true');button.title='Aufnahme beenden';button.textContent='■';field.focus();
   recognition.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const text=e.results[i][0].transcript.trim();if(e.results[i].isFinal)finalText+=(finalText?' ':'')+text;else interim+=(interim?' ':'')+text}const spoken=[finalText,interim].filter(Boolean).join(' ');field.value=original+(original&&spoken?' ':'')+spoken;field.dispatchEvent(new Event('input',{bubbles:true}))};
-  recognition.onerror=e=>{if(e.error!=='aborted')showVoiceMessage(button,voiceErrorText(e.error))};
-  recognition.onend=()=>{button.classList.remove('listening');button.setAttribute('aria-pressed','false');button.title='Text per Sprache eingeben';button.textContent='🎤';if(activeRecognition===recognition)activeRecognition=null;if(finalText)showVoiceMessage(button,'Sprache wurde übernommen.',false)};
-  try{recognition.start()}catch(e){showVoiceMessage(button,'Das Mikrofon konnte trotz erteilter Berechtigung nicht gestartet werden.');recognition.onend()}
+  recognition.onstart=()=>stopPermissionStream();
+  recognition.onerror=e=>{stopPermissionStream();if(e.error!=='aborted'){const detail=e.error==='not-allowed'?'Der Mikrofonzugriff selbst wurde erlaubt, aber der Chrome-Spracherkennungsdienst hat die Spracheingabe abgelehnt. Prüfe, ob die Seite direkt und nicht über eine Frame-Weiterleitung geöffnet ist.':voiceErrorText(e.error);showVoiceMessage(button,detail)}};
+  recognition.onend=()=>{stopPermissionStream();button.classList.remove('listening');button.setAttribute('aria-pressed','false');button.title='Text per Sprache eingeben';button.textContent='🎤';if(activeRecognition===recognition)activeRecognition=null;if(finalText)showVoiceMessage(button,'Sprache wurde übernommen.',false)};
+  try{recognition.start()}catch(e){stopPermissionStream();showVoiceMessage(button,'Das Mikrofon wurde freigegeben, aber die Spracherkennung konnte nicht gestartet werden: '+(e?.message||'unbekannter Fehler'));recognition.onend()}
 }
 function installVoiceInputs(){
   document.querySelectorAll('#root textarea,#root input').forEach(field=>{

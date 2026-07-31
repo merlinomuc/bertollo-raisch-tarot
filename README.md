@@ -1,4 +1,4 @@
-# Bertollo–Raisch Tarot 1.3.5
+# Bertollo–Raisch Tarot 1.3.6
 
 Dieses Projekt stellt drei Zugangswege bereit:
 
