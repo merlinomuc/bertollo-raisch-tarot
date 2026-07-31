@@ -75,3 +75,18 @@ Während der Entwicklung kann jedes berechtigte Familienmitglied den gleichen ö
 - `src/server.ts` – MCP-Server und Tool-Definitionen
 - `public/widget.html` – vollständige eingebettete App-Oberfläche
 - `data/cards.json` – 78 Karten samt eingebetteter Bilder
+
+## Submission-Version 1.1.1
+
+Öffentlicher Anbieter: **Bertollo**, Deutschland  
+Support: **tarot@bertollo.de**
+
+Zusätzliche öffentliche Seiten:
+
+- `/privacy`
+- `/terms`
+- `/support`
+- `/imprint`
+- `/health`
+
+Fragen und Legungen werden nicht dauerhaft serverseitig gespeichert. Vor einer öffentlichen Veröffentlichung muss die ladungsfähige Postanschrift im Impressum ergänzt werden.

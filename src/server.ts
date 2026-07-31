@@ -13,7 +13,7 @@ const widgetHtml = readFileSync(join(__dirname, "../public/widget.html"), "utf8"
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.0.0" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.1.1" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -51,7 +51,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo–Raisch Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: 1 },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.1.1", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -78,9 +78,20 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-app.use(express.json({ limit: "2mb" }));
-app.get("/", (_req, res) => res.type("text").send("Bertollo–Raisch Tarot MCP server. Endpoint: /mcp"));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.0.2" }));
+app.use((_req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  next();
+});
+app.use(express.json({ limit: "256kb" }));
+app.use(express.static(join(__dirname, "../public"), { index: false, maxAge: "1h" }));
+app.get("/", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/index.html")));
+app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/privacy.html")));
+app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
+app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
+app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.1.1" }));
 
 type SessionEntry = {
   transport: StreamableHTTPServerTransport;
