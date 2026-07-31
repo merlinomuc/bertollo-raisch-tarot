@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.3.6" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.3.7" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -54,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo–Raisch Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.3.6", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.3.7", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -95,11 +95,12 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.3.6", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.3.7", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
+const OPENAI_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 const FAMILY_ACCESS_CODE = process.env.FAMILY_ACCESS_CODE || "";
 const DAILY_IP_LIMIT = Math.max(1, Number(process.env.DAILY_IP_LIMIT || 20));
 const MONTHLY_REQUEST_LIMIT = Math.max(1, Number(process.env.MONTHLY_REQUEST_LIMIT || 300));
@@ -108,6 +109,23 @@ let monthlyUsage = { month: new Date().toISOString().slice(0, 7), count: 0 };
 
 function clientIp(req: express.Request) {
   return String(req.ip || req.socket.remoteAddress || "unknown");
+}
+
+const transcriptionUsageByIp = new Map<string, { day: string; count: number }>();
+const TRANSCRIPTION_DAILY_IP_LIMIT = Math.max(1, Number(process.env.TRANSCRIPTION_DAILY_IP_LIMIT || 60));
+
+function consumeTranscriptionUsage(req: express.Request, res: express.Response) {
+  const day = new Date().toISOString().slice(0, 10);
+  const ip = clientIp(req);
+  const current = transcriptionUsageByIp.get(ip);
+  const record = current?.day === day ? current : { day, count: 0 };
+  if (record.count >= TRANSCRIPTION_DAILY_IP_LIMIT) {
+    res.status(429).json({ error: "Das tägliche Spracheingabe-Limit wurde erreicht. Bitte später erneut versuchen." });
+    return false;
+  }
+  record.count += 1;
+  transcriptionUsageByIp.set(ip, record);
+  return true;
 }
 
 const FAMILY_COOKIE = "bertollo_family_access";
@@ -319,6 +337,41 @@ function parseReadingJson(text: string): ReadingResult {
   };
 }
 
+app.post("/api/transcribe", express.raw({
+  type: ["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "application/octet-stream"],
+  limit: "8mb",
+}), async (req, res) => {
+  if (!checkFamilyAccess(req, res)) return;
+  if (!openai) return res.status(503).json({ error: "Die OpenAI-Verbindung ist noch nicht eingerichtet." });
+  if (!Buffer.isBuffer(req.body) || req.body.length < 100) return res.status(400).json({ error: "Es wurden keine verwertbaren Audiodaten empfangen." });
+  if (!consumeTranscriptionUsage(req, res)) return;
+
+  const contentType = (req.get("content-type") || "audio/webm").split(";")[0].trim().toLowerCase();
+  const extensionByType: Record<string, string> = {
+    "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a",
+    "audio/mpeg": "mp3", "audio/wav": "wav", "application/octet-stream": "webm",
+  };
+  const extension = extensionByType[contentType] || "webm";
+  try {
+    const audioFile = new File([req.body], `spracheingabe.${extension}`, { type: contentType });
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: OPENAI_TRANSCRIPTION_MODEL,
+      language: "de",
+      prompt: "Deutsche Tarotfrage. Häufige Wörter: Kelche, Münzen, Stäbe, Schwerter, Ass, Narr, Die Liebenden, Keltisches Kreuz.",
+    });
+    const text = typeof transcription.text === "string" ? transcription.text.trim() : "";
+    if (!text) return res.status(422).json({ error: "In der Aufnahme wurde kein verständlicher Text erkannt." });
+    res.json({ text, model: OPENAI_TRANSCRIPTION_MODEL, storedByApp: false });
+  } catch (error: any) {
+    console.error("OpenAI transcription failed", { status: error?.status, message: error?.message, code: error?.code, type: error?.type });
+    const isLimit = error?.status === 429;
+    res.status(isLimit ? 429 : 502).json({
+      error: isLimit ? "OpenAI-Nutzungslimit erreicht. Bitte später erneut versuchen." : "Die Spracheingabe konnte gerade nicht transkribiert werden. Bitte versuche es erneut.",
+    });
+  }
+});
+
 app.post("/api/interpret", async (req, res) => {
   if (!checkFamilyAccess(req, res)) return;
   if (!openai) return res.status(503).json({ error: "Die OpenAI-Verbindung ist noch nicht eingerichtet." });
@@ -469,7 +522,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.3.6",
+      version: "1.3.7",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],

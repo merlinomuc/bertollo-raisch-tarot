@@ -95,20 +95,20 @@ async function requestInterpretation(cards,title,followupQuestion=''){const btn=
 function interpret(){requestInterpretation(state.drawn,layouts[state.layout].title)}
 function interpretOwn(){const validNames=new Set(CARDS.map(c=>c.name.toLowerCase()));const cards=state.ownCards.map((c,i)=>({name:c.name.trim(),position:c.position.trim()||`Position ${i+1}`}));if(cards.some(c=>!c.name)){setStatus('Bitte alle Kartennamen eintragen.',true);return}const invalid=cards.filter(c=>!validNames.has(c.name.toLowerCase()));if(invalid.length){setStatus('Unbekannte Karte: '+invalid.map(c=>esc(c.name)).join(', '),true);return}requestInterpretation(cards,'Eigene physische Legung')}
 const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
+const isFirefox=/firefox/i.test(navigator.userAgent);
 let activeRecognition=null;
+let activeRecorder=null;
+let activeRecorderButton=null;
+let activeRecorderTimer=null;
 function voiceErrorText(code){return ({'not-allowed':'Mikrofonzugriff wurde blockiert. Setze die Mikrofonberechtigung für diese Website einmal zurück oder auf „Zulassen“.','service-not-allowed':'Die Spracheingabe ist in diesem Browser oder durch das Betriebssystem nicht freigegeben.','no-speech':'Es wurde keine Sprache erkannt. Bitte versuche es erneut.','audio-capture':'Es wurde kein verfügbares Mikrofon gefunden.','network':'Die Spracherkennung konnte den Sprachdienst nicht erreichen.','aborted':'Spracheingabe wurde beendet.'})[code]||'Die Spracheingabe konnte nicht gestartet werden.'}
-function showVoiceMessage(button,text,isError=true){const wrap=button.closest('.voice-field');let msg=wrap?.nextElementSibling;if(!msg||!msg.classList.contains('voice-feedback')){msg=document.createElement('div');msg.className='voice-feedback';wrap?.insertAdjacentElement('afterend',msg)}msg.className='voice-feedback '+(isError?'voice-error':'voice-hint');msg.textContent=text;if(!isError)setTimeout(()=>{if(msg?.isConnected)msg.remove()},3500)}
+function showVoiceMessage(button,text,isError=true){const wrap=button.closest('.voice-field');let msg=wrap?.nextElementSibling;if(!msg||!msg.classList.contains('voice-feedback')){msg=document.createElement('div');msg.className='voice-feedback';wrap?.insertAdjacentElement('afterend',msg)}msg.className='voice-feedback '+(isError?'voice-error':'voice-hint');msg.textContent=text;if(!isError)setTimeout(()=>{if(msg?.isConnected)msg.remove()},4500)}
 async function requestMicrophonePermission(button){
   if(!window.isSecureContext){showVoiceMessage(button,'Mikrofonzugriff ist nur über eine sichere HTTPS-Adresse möglich.');return false}
   if(!navigator.mediaDevices?.getUserMedia){showVoiceMessage(button,'Dieser Browser kann den Mikrofonzugriff nicht aktiv anfordern.');return false}
   try{
-    if(window.top!==window.self){
-      showVoiceMessage(button,'Die App läuft in einem eingebetteten Fenster. Dort kann der übergeordnete Anbieter den Mikrofonzugriff blockieren. Öffne die App direkt unter '+location.origin+'.');
-      return false
-    }
+    if(window.top!==window.self){showVoiceMessage(button,'Die App läuft in einem eingebetteten Fenster. Öffne sie direkt unter '+location.origin+'.');return false}
     showVoiceMessage(button,'Bitte bestätige jetzt den Mikrofonzugriff im Browserdialog.',false);
-    const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
-    return stream
+    return await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})
   }catch(error){
     const name=error?.name||'';
     if(name==='NotAllowedError'||name==='PermissionDeniedError')showVoiceMessage(button,'Der Mikrofonzugriff wurde abgelehnt oder ist bereits blockiert. Die App kann eine gespeicherte Blockierung nicht selbst aufheben.');
@@ -118,8 +118,42 @@ async function requestMicrophonePermission(button){
     return false
   }
 }
-async function startVoiceInput(field,button){
-  if(!SpeechRecognition){showVoiceMessage(button,'Spracheingabe wird von diesem Browser nicht unterstützt. Nutze möglichst Chrome oder Edge.');return}
+function setVoiceButtonIdle(button){button.disabled=false;button.classList.remove('listening');button.setAttribute('aria-pressed','false');button.title='Text per Sprache eingeben';button.textContent='🎤'}
+function appendTranscribedText(field,text){const existing=field.value.trimEnd();field.value=existing+(existing&&text?' ':'')+text.trim();field.dispatchEvent(new Event('input',{bubbles:true}));field.focus()}
+function preferredRecorderMimeType(){const options=['audio/ogg;codecs=opus','audio/webm;codecs=opus','audio/webm','audio/mp4'];return options.find(t=>window.MediaRecorder?.isTypeSupported?.(t))||''}
+async function startFirefoxTranscription(field,button){
+  if(!window.MediaRecorder){showVoiceMessage(button,'Firefox kann auf diesem Gerät keine Audioaufnahme starten.');return}
+  if(activeRecorder){try{activeRecorder.stop()}catch{}return}
+  button.disabled=true;button.textContent='…';button.title='Mikrofonberechtigung wird geprüft';
+  const stream=await requestMicrophonePermission(button);
+  if(!stream){setVoiceButtonIdle(button);return}
+  const mimeType=preferredRecorderMimeType();
+  let recorder;
+  try{recorder=mimeType?new MediaRecorder(stream,{mimeType}):new MediaRecorder(stream)}catch(e){stream.getTracks().forEach(t=>t.stop());setVoiceButtonIdle(button);showVoiceMessage(button,'Die Audioaufnahme konnte nicht gestartet werden: '+(e?.message||'unbekannter Fehler'));return}
+  const chunks=[];activeRecorder=recorder;activeRecorderButton=button;
+  button.disabled=false;button.classList.add('listening');button.setAttribute('aria-pressed','true');button.title='Aufnahme beenden';button.textContent='■';field.focus();
+  showVoiceMessage(button,'Firefox-Aufnahme läuft. Zum Beenden erneut auf ■ tippen.',false);
+  recorder.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+  recorder.onerror=e=>showVoiceMessage(button,'Bei der Audioaufnahme ist ein Fehler aufgetreten: '+(e?.error?.message||'unbekannter Fehler'));
+  recorder.onstop=async()=>{
+    if(activeRecorderTimer){clearTimeout(activeRecorderTimer);activeRecorderTimer=null}
+    stream.getTracks().forEach(t=>t.stop());activeRecorder=null;activeRecorderButton=null;
+    button.disabled=true;button.classList.remove('listening');button.textContent='…';button.title='Sprache wird in Text umgewandelt';
+    if(!chunks.length){setVoiceButtonIdle(button);showVoiceMessage(button,'Es wurden keine Audiodaten aufgenommen.');return}
+    const blob=new Blob(chunks,{type:recorder.mimeType||mimeType||'audio/webm'});
+    try{
+      const r=await fetch('/api/transcribe',{method:'POST',headers:{'Content-Type':blob.type||'audio/webm'},credentials:'same-origin',body:blob});
+      const data=await r.json().catch(()=>({}));
+      if(!r.ok){if(r.status===401)throw new Error('Die Familiencode-Anmeldung ist abgelaufen. Bitte melde dich erneut an.');throw new Error(data.error||`Transkription fehlgeschlagen (HTTP ${r.status}).`)}
+      if(!data.text)throw new Error('Es wurde kein verständlicher Text erkannt.');
+      appendTranscribedText(field,data.text);showVoiceMessage(button,'Sprache wurde übernommen.',false)
+    }catch(e){showVoiceMessage(button,e?.message||String(e))}finally{setVoiceButtonIdle(button)}
+  };
+  recorder.start(250);
+  activeRecorderTimer=setTimeout(()=>{if(activeRecorder&&activeRecorder.state==='recording'){showVoiceMessage(button,'Die maximale Aufnahmezeit von 60 Sekunden wurde erreicht.',false);activeRecorder.stop()}},60000)
+}
+async function startBrowserSpeechRecognition(field,button){
+  if(!SpeechRecognition){showVoiceMessage(button,'Die direkte Spracheingabe wird von diesem Browser nicht unterstützt. Nutze Chrome oder Edge; Firefox verwendet automatisch die serverseitige Transkription.');return}
   if(activeRecognition){try{activeRecognition.abort()}catch{}activeRecognition=null}
   button.disabled=true;button.textContent='…';button.title='Mikrofonberechtigung wird geprüft';
   const permissionStream=await requestMicrophonePermission(button);
@@ -131,16 +165,25 @@ async function startVoiceInput(field,button){
   button.classList.add('listening');button.setAttribute('aria-pressed','true');button.title='Aufnahme beenden';button.textContent='■';field.focus();
   recognition.onresult=e=>{let interim='';for(let i=e.resultIndex;i<e.results.length;i++){const text=e.results[i][0].transcript.trim();if(e.results[i].isFinal)finalText+=(finalText?' ':'')+text;else interim+=(interim?' ':'')+text}const spoken=[finalText,interim].filter(Boolean).join(' ');field.value=original+(original&&spoken?' ':'')+spoken;field.dispatchEvent(new Event('input',{bubbles:true}))};
   recognition.onstart=()=>stopPermissionStream();
-  recognition.onerror=e=>{stopPermissionStream();if(e.error!=='aborted'){const detail=e.error==='not-allowed'?'Der Mikrofonzugriff selbst wurde erlaubt, aber der Chrome-Spracherkennungsdienst hat die Spracheingabe abgelehnt. Prüfe, ob die Seite direkt und nicht über eine Frame-Weiterleitung geöffnet ist.':voiceErrorText(e.error);showVoiceMessage(button,detail)}};
-  recognition.onend=()=>{stopPermissionStream();button.classList.remove('listening');button.setAttribute('aria-pressed','false');button.title='Text per Sprache eingeben';button.textContent='🎤';if(activeRecognition===recognition)activeRecognition=null;if(finalText)showVoiceMessage(button,'Sprache wurde übernommen.',false)};
+  recognition.onerror=e=>{stopPermissionStream();if(e.error!=='aborted'){const detail=e.error==='not-allowed'?'Der Mikrofonzugriff selbst wurde erlaubt, aber der Browser-Spracherkennungsdienst hat die Spracheingabe abgelehnt.':voiceErrorText(e.error);showVoiceMessage(button,detail)}};
+  recognition.onend=()=>{stopPermissionStream();setVoiceButtonIdle(button);if(activeRecognition===recognition)activeRecognition=null;if(finalText)showVoiceMessage(button,'Sprache wurde übernommen.',false)};
   try{recognition.start()}catch(e){stopPermissionStream();showVoiceMessage(button,'Das Mikrofon wurde freigegeben, aber die Spracherkennung konnte nicht gestartet werden: '+(e?.message||'unbekannter Fehler'));recognition.onend()}
+}
+async function startVoiceInput(field,button){
+  if(isFirefox)return startFirefoxTranscription(field,button);
+  return startBrowserSpeechRecognition(field,button)
+}
+function stopActiveVoice(button){
+  if(activeRecorder&&button===activeRecorderButton){try{activeRecorder.stop()}catch{}return true}
+  if(activeRecognition&&button.classList.contains('listening')){try{activeRecognition.stop()}catch{}return true}
+  return false
 }
 function installVoiceInputs(){
   document.querySelectorAll('#root textarea,#root input').forEach(field=>{
     const type=(field.getAttribute('type')||'text').toLowerCase();
     if(field.dataset.voiceReady||field.disabled||field.readOnly||['password','number','checkbox','radio','hidden','file','date','time','email','url'].includes(type))return;
     field.dataset.voiceReady='1';const wrap=document.createElement('div');wrap.className='voice-field';field.parentNode.insertBefore(wrap,field);wrap.appendChild(field);
-    const button=document.createElement('button');button.type='button';button.className='voice-button';button.textContent='🎤';button.title='Text per Sprache eingeben';button.setAttribute('aria-label','Text per Sprache in dieses Feld eingeben');button.setAttribute('aria-pressed','false');button.onclick=()=>{if(activeRecognition&&button.classList.contains('listening')){activeRecognition.stop();return}startVoiceInput(field,button)};wrap.appendChild(button)
+    const button=document.createElement('button');button.type='button';button.className='voice-button';button.textContent='🎤';button.title='Text per Sprache eingeben';button.setAttribute('aria-label','Text per Sprache in dieses Feld eingeben');button.setAttribute('aria-pressed','false');button.onclick=()=>{if(stopActiveVoice(button))return;startVoiceInput(field,button)};wrap.appendChild(button)
   })
 }
 window.addEventListener('unhandledrejection',e=>{console.error(e.reason);setStatus('Unerwarteter Fehler: '+esc(e.reason?.message||String(e.reason)),true)});

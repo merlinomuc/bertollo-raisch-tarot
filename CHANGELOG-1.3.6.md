@@ -1,4 +1,4 @@
-# Version 1.3.6
+# Version 1.3.7
 
 - Kritischen Mikrofonfehler behoben: Der Server blockierte das Mikrofon versehentlich mit `Permissions-Policy: microphone=()`.
 - Mikrofon ist nun für die eigene App-Domain freigegeben.
