@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import OpenAI from "openai";
 
@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.3.0" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.3.3" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -54,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo–Raisch Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.3.0", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.3.3", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -78,7 +78,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Authorization");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Authorization, X-Family-Code");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -95,7 +95,7 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.3.0", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.3.3", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -110,15 +110,85 @@ function clientIp(req: express.Request) {
   return String(req.ip || req.socket.remoteAddress || "unknown");
 }
 
-function checkFamilyAccess(req: express.Request, res: express.Response) {
-  if (!FAMILY_ACCESS_CODE) return true;
-  const supplied = String(req.get("X-Family-Code") || "");
-  if (supplied !== FAMILY_ACCESS_CODE) {
-    res.status(401).json({ error: "Familiencode fehlt oder ist falsch." });
-    return false;
+const FAMILY_COOKIE = "bertollo_family_access";
+const FAMILY_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 180;
+
+function parseCookies(req: express.Request) {
+  const result: Record<string, string> = {};
+  const header = req.get("cookie") || "";
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key) result[key] = decodeURIComponent(value);
   }
-  return true;
+  return result;
 }
+
+function familyToken() {
+  return createHmac("sha256", FAMILY_ACCESS_CODE).update("bertollo-raisch-family-access-v1").digest("hex");
+}
+
+function safeEqual(a: string, b: string) {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+function hasFamilyAccess(req: express.Request) {
+  if (!FAMILY_ACCESS_CODE) return true;
+  const cookieToken = parseCookies(req)[FAMILY_COOKIE] || "";
+  if (cookieToken && safeEqual(cookieToken, familyToken())) return true;
+  // Backwards compatibility for older clients. New browser UI uses the HttpOnly cookie.
+  const supplied = String(req.get("X-Family-Code") || "");
+  return Boolean(supplied) && safeEqual(supplied, FAMILY_ACCESS_CODE);
+}
+
+function checkFamilyAccess(req: express.Request, res: express.Response) {
+  if (hasFamilyAccess(req)) return true;
+  res.status(401).json({ error: "Familiencode fehlt oder ist falsch.", code: "FAMILY_ACCESS_DENIED" });
+  return false;
+}
+
+function setFamilyCookie(req: express.Request, res: express.Response) {
+  const secure = req.secure || req.get("x-forwarded-proto") === "https";
+  const attributes = [
+    `${FAMILY_COOKIE}=${encodeURIComponent(familyToken())}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${FAMILY_COOKIE_MAX_AGE_SECONDS}`,
+  ];
+  if (secure) attributes.push("Secure");
+  res.setHeader("Set-Cookie", attributes.join("; "));
+}
+
+function clearFamilyCookie(req: express.Request, res: express.Response) {
+  const secure = req.secure || req.get("x-forwarded-proto") === "https";
+  const attributes = [`${FAMILY_COOKIE}=`, "Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
+  if (secure) attributes.push("Secure");
+  res.setHeader("Set-Cookie", attributes.join("; "));
+}
+
+app.get("/api/auth/status", (req, res) => {
+  res.json({ required: Boolean(FAMILY_ACCESS_CODE), authenticated: hasFamilyAccess(req) });
+});
+
+app.post("/api/auth/login", (req, res) => {
+  if (!FAMILY_ACCESS_CODE) return res.json({ required: false, authenticated: true, message: "Für diese App ist kein Familiencode erforderlich." });
+  const supplied = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+  if (!supplied || !safeEqual(supplied, FAMILY_ACCESS_CODE)) {
+    return res.status(401).json({ error: "Der Familiencode ist nicht korrekt.", code: "INVALID_FAMILY_CODE" });
+  }
+  setFamilyCookie(req, res);
+  res.json({ required: true, authenticated: true, message: "Code wurde akzeptiert und für zukünftige Besuche gespeichert." });
+});
+
+app.post("/api/auth/logout", (req, res) => {
+  clearFamilyCookie(req, res);
+  res.json({ authenticated: false });
+});
 
 function consumeUsage(req: express.Request, res: express.Response) {
   const now = new Date();
@@ -142,15 +212,82 @@ function consumeUsage(req: express.Request, res: express.Response) {
   return true;
 }
 
-const interpretationInstructions = `Du bist Bertollo–Raisch Tarot, ein erfahrener deutschsprachiger Tarot-Interpreter mit psychologisch tiefer, intuitiver und strukturierter Deutungsweise.
+const interpretationInstructions = `Du bist Bertollo–Raisch Tarot. Deute auf Deutsch, psychologisch fundiert, klar, ehrlich und knapp. Alle Karten sind aufrecht. Keine Garantien, Wunschdeutungen, Angstmacherei oder unbegründeten Behauptungen über andere Personen. Tarot dient Unterhaltung und Selbstreflexion.
 
-Deute präzise, nachvollziehbar, ehrlich und psychologisch fundiert. Keine Wunschdeutung, keine unbegründete Spekulation, keine unnötige Esoterik, keine Angstmacherei und keine Garantien. Alle Karten werden ausschließlich aufrecht verwendet. Leite jede Aussage aus Frage, Position und Zusammenspiel der Karten ab. Stelle Gedanken oder Gefühle anderer Menschen nie als Tatsachen dar. Bei mehreren Lesarten nenne zuerst die wahrscheinlichste und danach nur sinnvolle Alternativen.
+Gib ausschließlich valides JSON zurück, ohne Markdown-Codeblock und ohne Text außerhalb des JSON. Verwende exakt diese Struktur:
+{
+  "subject": "Worum es bei der Legung geht, in 1–2 kurzen Sätzen",
+  "positions": [
+    {"number": 1, "position": "Positionsname", "card": "Kartenname", "interpretation": "knappe positionsbezogene Deutung"}
+  ],
+  "summary": "kurze Zusammenfassung des Verlaufs",
+  "overall_analysis": "Zusammenspiel und wichtigste psychologische Dynamik",
+  "assessment": "realistische, ungeschönte Einschätzung ohne Absolutheit",
+  "key_message": "prägnante Kernaussage",
+  "essence": "ein sehr kurzer Satz",
+  "reflection_question": "eine konkrete Reflexionsfrage",
+  "suggested_followup": "genau eine sinnvolle Folgefrage"
+}
 
-Untersuche, soweit durch die Karten gestützt: äußere Ereignisse, innere Prozesse, Schutzmauern, emotionale Blockaden, Beziehungsmuster, Projektionen, unausgesprochene Gefühle, Entwicklungspotenzial und wahrscheinliche Tendenz. Nimm niemals automatisch eine dritte Person an. Keine exakten Zeitversprechen.
+Regeln zur Länge:
+- subject höchstens 45 Wörter.
+- Jede Positionsdeutung höchstens 70 Wörter; bei 10 Karten höchstens 45 Wörter.
+- summary, overall_analysis und assessment jeweils höchstens 90 Wörter.
+- key_message höchstens 55 Wörter.
+- essence genau ein kurzer Satz.
+- Keine Wiederholungen zwischen den Abschnitten.
+- Deute jede Karte exakt in ihrer gelieferten Position.
+- Bei Ja/Nein muss assessment mit „Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“ oder „Deutliches Nein“ beginnen und klarstellen, dass es nur eine Tendenz ist.`;
 
-Tarot dient Unterhaltung und Selbstreflexion. Keine medizinischen, psychotherapeutischen, rechtlichen oder finanziellen Entscheidungen vorgeben. Behaupte Schwangerschaft, Krankheit, Untreue, Trennung, Tod oder Katastrophen nie als sichere Tatsache.
+const followupInstructions = `Du vertiefst eine bereits bestehende Tarotlegung auf Deutsch. Beantworte nur die neue Folgefrage anhand derselben Karten und Positionen. Ziehe keine neue Karte und erfinde keine neue Information. Schreibe knapp, psychologisch fundiert und ohne Garantien.
 
-Strukturiere die Antwort passend zur Legung mit Überschriften. Deute zuerst jede Position, dann das Zusammenspiel. Jede vollständige Deutung endet exakt mit den Abschnitten: Kernaussage, Essenz, Reflexionsfrage und Sinnvolle Folgefrage. Formuliere genau eine Folgefrage.`;
+Gib ausschließlich valides JSON zurück:
+{
+  "subject": "Folgefrage in eigenen Worten",
+  "positions": [],
+  "summary": "fokussierte Antwort auf die Folgefrage",
+  "overall_analysis": "wie die vorhandenen Karten gemeinsam darauf antworten",
+  "assessment": "realistische Einschätzung",
+  "key_message": "prägnante Kernaussage",
+  "essence": "ein kurzer Satz",
+  "reflection_question": "eine konkrete Reflexionsfrage",
+  "suggested_followup": "genau eine weitere sinnvolle Folgefrage"
+}
+Jeder längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.`;
+
+type ReadingResult = {
+  subject: string;
+  positions: Array<{ number: number; position: string; card: string; interpretation: string }>;
+  summary: string;
+  overall_analysis: string;
+  assessment: string;
+  key_message: string;
+  essence: string;
+  reflection_question: string;
+  suggested_followup: string;
+};
+
+function parseReadingJson(text: string): ReadingResult {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  const jsonText = firstBrace >= 0 && lastBrace > firstBrace ? cleaned.slice(firstBrace, lastBrace + 1) : cleaned;
+  const data = JSON.parse(jsonText);
+  const stringValue = (value: unknown) => typeof value === "string" ? value.trim() : "";
+  const positions = Array.isArray(data.positions) ? data.positions.map((item: any, index: number) => ({
+    number: Number.isFinite(Number(item?.number)) ? Number(item.number) : index + 1,
+    position: stringValue(item?.position),
+    card: stringValue(item?.card),
+    interpretation: stringValue(item?.interpretation),
+  })).filter((item: any) => item.card || item.interpretation) : [];
+  return {
+    subject: stringValue(data.subject), positions,
+    summary: stringValue(data.summary), overall_analysis: stringValue(data.overall_analysis),
+    assessment: stringValue(data.assessment), key_message: stringValue(data.key_message),
+    essence: stringValue(data.essence), reflection_question: stringValue(data.reflection_question),
+    suggested_followup: stringValue(data.suggested_followup),
+  };
+}
 
 app.post("/api/interpret", async (req, res) => {
   if (!checkFamilyAccess(req, res)) return;
@@ -158,6 +295,8 @@ app.post("/api/interpret", async (req, res) => {
   const spread = typeof req.body?.spread === "string" ? req.body.spread.slice(0, 30) : "custom";
   const spreadTitle = typeof req.body?.spread_title === "string" ? req.body.spread_title.slice(0, 120) : "Tarotlegung";
   const question = typeof req.body?.question === "string" ? req.body.question.trim().slice(0, 2000) : "";
+  const followupQuestion = typeof req.body?.followup_question === "string" ? req.body.followup_question.trim().slice(0, 1200) : "";
+  const previousReading = typeof req.body?.previous_reading === "string" ? req.body.previous_reading.trim().slice(0, 6000) : "";
   const rawCards = Array.isArray(req.body?.cards) ? req.body.cards : [];
   if (rawCards.length < 1 || rawCards.length > 20) return res.status(400).json({ error: "Bitte 1 bis 20 Karten übergeben." });
   const cardsForPrompt: Array<{ position: string; name: string }> = [];
@@ -168,20 +307,25 @@ app.post("/api/interpret", async (req, res) => {
     cardsForPrompt.push({ position, name });
   }
   if (!consumeUsage(req, res)) return;
-  const userInput = `Legung: ${spreadTitle} (${spread})\nFrage/Thema: ${question || "Kein spezielles Thema"}\nAlle Karten sind aufrecht.\n\nKarten:\n${cardsForPrompt.map((c, i) => `${i + 1}. ${c.position}: ${c.name}`).join("\n")}\n\nErstelle jetzt die vollständige deutsche Deutung.`;
+  const cardsText = cardsForPrompt.map((c, i) => `${i + 1}. ${c.position}: ${c.name}`).join("\n");
+  const isFollowup = Boolean(followupQuestion);
+  const userInput = isFollowup
+    ? `Ursprüngliche Legung: ${spreadTitle} (${spread})\nUrsprüngliche Frage: ${question || "Kein spezielles Thema"}\nKarten:\n${cardsText}\n\nBisherige Deutung (nur als Kontext):\n${previousReading || "Nicht übergeben"}\n\nNeue Folgefrage: ${followupQuestion}\n\nBeantworte ausschließlich diese Folgefrage anhand derselben Karten.`
+    : `Legung: ${spreadTitle} (${spread})\nFrage/Thema: ${question || "Kein spezielles Thema"}\nAlle Karten sind aufrecht.\n\nKarten:\n${cardsText}\n\nErstelle die kurze, strukturierte Deutung als JSON.`;
   try {
     const response = await openai.responses.create({
       model: OPENAI_MODEL,
-      instructions: interpretationInstructions,
+      instructions: isFollowup ? followupInstructions : interpretationInstructions,
       input: userInput,
-      max_output_tokens: 2800,
+      max_output_tokens: isFollowup ? 1000 : 1800,
     });
-    const interpretation = response.output_text?.trim();
-    if (!interpretation) throw new Error("Leere Modellantwort");
-    res.json({ interpretation, model: OPENAI_MODEL, usage: response.usage ?? null, storedByApp: false });
+    const raw = response.output_text?.trim();
+    if (!raw) throw new Error("Leere Modellantwort");
+    const reading = parseReadingJson(raw);
+    res.json({ reading, interpretation: raw, isFollowup, model: OPENAI_MODEL, usage: response.usage ?? null, storedByApp: false });
   } catch (error: any) {
     console.error("OpenAI interpretation failed", error?.status, error?.message);
-    res.status(error?.status === 429 ? 429 : 502).json({ error: error?.status === 429 ? "OpenAI-Nutzungslimit erreicht. Bitte später erneut versuchen." : "Die Deutung konnte gerade nicht erstellt werden." });
+    res.status(error?.status === 429 ? 429 : 502).json({ error: error?.status === 429 ? "OpenAI-Nutzungslimit erreicht. Bitte später erneut versuchen." : "Die Deutung konnte gerade nicht erstellt oder formatiert werden. Bitte versuche es erneut." });
   }
 });
 
@@ -261,7 +405,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.3.0",
+      version: "1.3.3",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],
