@@ -68,17 +68,33 @@ function createServer() {
 }
 
 const app = express();
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Authorization");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.use(express.json({ limit: "2mb" }));
 app.get("/", (_req, res) => res.type("text").send("Bertollo–Raisch Tarot MCP server. Endpoint: /mcp"));
 app.post("/mcp", async (req, res) => {
   const server = createServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
   res.on("close", () => { transport.close(); server.close(); });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
-app.get("/mcp", (_req, res) => res.status(405).send("Use POST /mcp"));
-app.delete("/mcp", (_req, res) => res.status(405).send("Stateless server"));
+app.get("/mcp", (_req, res) => {
+  res.setHeader("Allow", "POST, OPTIONS");
+  res.status(405).json({ error: "Use POST /mcp" });
+});
+app.delete("/mcp", (_req, res) => {
+  res.setHeader("Allow", "POST, OPTIONS");
+  res.status(405).json({ error: "Stateless server" });
+});
 
 const port = Number(process.env.PORT || 8000);
 app.listen(port, "0.0.0.0", () => console.log(`Tarot MCP server listening on http://localhost:${port}/mcp`));
