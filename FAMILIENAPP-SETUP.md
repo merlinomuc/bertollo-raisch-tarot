@@ -1,4 +1,4 @@
-# Bertollo–Raisch Tarot Familien-App 1.3.9
+# Bertollo–Raisch Tarot Familien-App 1.4.0
 
 ## Neue Funktionen
 

@@ -1,4 +1,4 @@
-# Änderungen in 1.3.9
+# Änderungen in 1.4.0
 
 - Sichtbare Live-Rückmeldung während jeder Spracheingabe.
 - Der Mikrofon-Button zeigt fünf Pegelbalken, die auf die ankommende Lautstärke reagieren.

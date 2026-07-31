@@ -1,10 +1,17 @@
 {
   "name": "Bertollo–Raisch Tarot",
   "short_name": "Bertollo Tarot",
-  "description": "Grafische Tarot-App mit 78 eigenen Kartenmotiven.",
+  "description": "Elegante grafische Tarot-App mit 78 eigenen Kartenmotiven und originaler Kartenrückseite.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0814",
-  "theme_color": "#180f27",
-  "icons": [{"src":"/logo.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+  "background_color": "#080909",
+  "theme_color": "#0f100f",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }
