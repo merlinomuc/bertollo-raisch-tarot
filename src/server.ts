@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.2" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.4" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -41,8 +41,8 @@ function createServer() {
   server.registerTool(
     "open_tarot_app",
     {
-      title: "Bertollo–Raisch Tarot öffnen",
-      description: "Öffnet die interaktive Bertollo–Raisch Tarot-App. Verwende dieses Tool, wenn die Person Tarotkarten ziehen, eine Legung auswählen oder eigene physisch gelegte Karten eingeben möchte.",
+      title: "Bertollo Tarot öffnen",
+      description: "Öffnet die interaktive Bertollo Tarot-App. Verwende dieses Tool, wenn die Person Tarotkarten ziehen, eine Legung auswählen oder eigene physisch gelegte Karten eingeben möchte.",
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: {
@@ -53,8 +53,8 @@ function createServer() {
       }
     },
     async () => ({
-      content: [{ type: "text", text: "Die Bertollo–Raisch Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.2", language: "de", provider: "Bertollo", storesUserData: false },
+      content: [{ type: "text", text: "Die Bertollo Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.4", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -63,7 +63,7 @@ function createServer() {
     "tarot_app_help",
     {
       title: "Tarot-App erklären",
-      description: "Erklärt kurz die sechs verfügbaren Legungen der Bertollo–Raisch Tarot-App.",
+      description: "Erklärt kurz die sechs verfügbaren Legungen der Bertollo Tarot-App.",
       inputSchema: { topic: z.string().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }
     },
@@ -95,7 +95,7 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.2", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.4", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -257,21 +257,23 @@ Regeln zur Länge:
 - Deute jede Karte exakt in ihrer gelieferten Position.
 - Bei Ja/Nein muss assessment mit „Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“ oder „Deutliches Nein“ beginnen und klarstellen, dass es nur eine Tendenz ist.`;
 
-const followupInstructions = `Du vertiefst eine bereits bestehende Tarotlegung auf Deutsch. Beantworte nur die neue Folgefrage anhand derselben Karten und Positionen. Ziehe keine neue Karte und erfinde keine neue Information. Schreibe knapp, psychologisch fundiert und ohne Garantien.
+const followupInstructions = `Du deutest eine einzelne neue Folgekarte zu einer bereits bestehenden Tarotlegung. Beantworte ausschließlich die neue Folgefrage. Nutze die ursprüngliche Legung als Kontext und die neu gezogene Folgekarte als Fokus. Alle Karten sind aufrecht. Erfinde keine weiteren Karten oder Tatsachen. Schreibe knapp, psychologisch fundiert und ohne Garantien.
 
 Gib ausschließlich valides JSON zurück:
 {
   "subject": "Folgefrage in eigenen Worten",
-  "positions": [],
-  "summary": "fokussierte Antwort auf die Folgefrage",
-  "overall_analysis": "wie die vorhandenen Karten gemeinsam darauf antworten",
+  "positions": [
+    {"number": 1, "position": "Folgekarte", "card": "Name der neuen Folgekarte", "interpretation": "konkrete Deutung dieser Karte zur Folgefrage"}
+  ],
+  "summary": "wahrscheinlichste Antwort auf die Folgefrage",
+  "overall_analysis": "Verbindung der Folgekarte mit der ursprünglichen Legung",
   "assessment": "realistische Einschätzung",
   "key_message": "prägnante Kernaussage",
   "essence": "ein kurzer Satz",
   "reflection_question": "eine konkrete Reflexionsfrage",
   "suggested_followup": "genau eine weitere sinnvolle Folgefrage"
 }
-Jeder längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.`;
+Die Positionsdeutung höchstens 75 Wörter, jeder weitere längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.`;
 
 type ReadingResult = {
   subject: string;
@@ -399,8 +401,27 @@ app.post("/api/interpret", async (req, res) => {
       ? "Antwortlänge: ausführlich, aber ohne Wiederholungen. Positionsdeutungen maximal 85 Wörter, übrige Abschnitte maximal 130 Wörter."
       : "Antwortlänge: mittel. Halte dich an die Standard-Längenregeln.";
   const userInput = isFollowup
-    ? `Ursprüngliche Legung: ${spreadTitle} (${spread})\nUrsprüngliche Frage: ${question || "Kein spezielles Thema"}\nKarten:\n${cardsText}\n\nBisherige Deutung (nur als Kontext):\n${previousReading || "Nicht übergeben"}\n\nNeue Folgefrage: ${followupQuestion}\n\nBeantworte ausschließlich diese Folgefrage anhand derselben Karten.\n${lengthGuidance}`
-    : `Legung: ${spreadTitle} (${spread})\nFrage/Thema: ${question || "Kein spezielles Thema"}\nAlle Karten sind aufrecht.\n\nKarten:\n${cardsText}\n\nErstelle die strukturierte Deutung als JSON.\n${lengthGuidance}`;
+    ? `Ursprüngliche Frage: ${question || "Kein spezielles Thema"}
+
+Ursprüngliche Legung und bisherige Deutung (als Kontext):
+${previousReading || "Nicht übergeben"}
+
+Neu gezogene einzelne Folgekarte:
+${cardsText}
+
+Neue Folgefrage: ${followupQuestion}
+
+Deute genau diese neue Folgekarte in Bezug auf die Folgefrage und verbinde sie nachvollziehbar mit der ursprünglichen Legung.
+${lengthGuidance}`
+    : `Legung: ${spreadTitle} (${spread})
+Frage/Thema: ${question || "Kein spezielles Thema"}
+Alle Karten sind aufrecht.
+
+Karten:
+${cardsText}
+
+Erstelle die strukturierte Deutung als JSON.
+${lengthGuidance}`;
   try {
     const isCeltic = spread === "celtic" || cardsForPrompt.length >= 10;
     const maxOutputTokens = isFollowup ? (responseLength === "long" ? 1900 : responseLength === "short" ? 950 : 1400) : (isCeltic ? (responseLength === "long" ? 4800 : responseLength === "short" ? 2600 : 3600) : (responseLength === "long" ? 3000 : responseLength === "short" ? 1500 : 2200));
@@ -429,6 +450,9 @@ app.post("/api/interpret", async (req, res) => {
     const reading = parseReadingJson(raw);
     if (!isFollowup && reading.positions.length !== cardsForPrompt.length) {
       throw new Error(`Unerwartete Positionsanzahl: ${reading.positions.length} statt ${cardsForPrompt.length}`);
+    }
+    if (isFollowup && reading.positions.length !== 1) {
+      throw new Error(`Unerwartete Folgepositionsanzahl: ${reading.positions.length} statt 1`);
     }
     res.json({ reading, interpretation: raw, isFollowup, model: OPENAI_MODEL, usage: response.usage ?? null, storedByApp: false });
   } catch (error: any) {
@@ -528,7 +552,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.4.2",
+      version: "1.4.4",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],

@@ -1,20 +1,20 @@
 {
-  "name": "Bertollo–Raisch Tarot",
+  "name": "Bertollo Tarot",
   "short_name": "Bertollo Tarot",
-  "description": "Elegante grafische Tarot-App mit 78 eigenen Kartenmotiven und originaler Kartenrückseite.",
+  "description": "Elegante grafische Tarot-App mit eigenen Kartenmotiven und schwarz-goldenem Design.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#080909",
   "theme_color": "#0f100f",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/icon-192-v143.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-512-v143.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
