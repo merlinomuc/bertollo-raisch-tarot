@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.7" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.8" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -54,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.7", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.8", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -95,7 +95,7 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.7", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.8", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -434,23 +434,55 @@ Erstelle die strukturierte Deutung als JSON.
 ${lengthGuidance}`;
   try {
     const isCeltic = spread === "celtic" || cardsForPrompt.length >= 10;
-    const maxOutputTokens = isFollowup ? (responseLength === "long" ? 1900 : responseLength === "short" ? 950 : 1400) : (isCeltic ? (responseLength === "long" ? 4800 : responseLength === "short" ? 2600 : 3600) : (responseLength === "long" ? 3000 : responseLength === "short" ? 1500 : 2200));
-    const response = await openai.responses.create({
-      model: OPENAI_MODEL,
-      instructions: isFollowup ? followupInstructions : interpretationInstructions,
-      input: userInput,
-      max_output_tokens: maxOutputTokens,
-      text: {
-        verbosity: "low",
-        format: {
-          type: "json_schema",
-          name: "tarot_reading",
-          description: "Strukturierte, kurze Tarotdeutung für die Familien-App",
-          strict: true,
-          schema: readingJsonSchema,
+    const firstBudget = isFollowup
+      ? (responseLength === "long" ? 4200 : responseLength === "short" ? 2200 : 3000)
+      : isCeltic
+        ? (responseLength === "long" ? 6000 : responseLength === "short" ? 3400 : 4800)
+        : (responseLength === "long" ? 3800 : responseLength === "short" ? 1900 : 2800);
+    const retryBudget = isFollowup
+      ? (responseLength === "long" ? 6200 : responseLength === "short" ? 3600 : 4800)
+      : isCeltic
+        ? (responseLength === "long" ? 7800 : responseLength === "short" ? 4800 : 6500)
+        : (responseLength === "long" ? 5200 : responseLength === "short" ? 3000 : 4200);
+
+    const createInterpretation = async (maxOutputTokens: number, compactRetry: boolean) => {
+      const request: any = {
+        model: OPENAI_MODEL,
+        instructions: isFollowup ? followupInstructions : interpretationInstructions,
+        input: compactRetry
+          ? `${userInput}
+
+WICHTIGER ZWEITER VERSUCH: Antworte vollständig, aber besonders kompakt. Halte alle JSON-Felder kurz und schließe das JSON sicher ab.`
+          : userInput,
+        max_output_tokens: maxOutputTokens,
+        text: {
+          verbosity: "low",
+          format: {
+            type: "json_schema",
+            name: "tarot_reading",
+            description: "Strukturierte, kurze Tarotdeutung für die Familien-App",
+            strict: true,
+            schema: readingJsonSchema,
+          },
         },
-      },
-    });
+      };
+      // GPT-5-Modelle sollen ihr Tokenbudget überwiegend für die sichtbare Antwort
+      // statt für interne Überlegungen verwenden. Bei anderen Modellfamilien wird
+      // dieses Feld weggelassen, damit die Anfrage kompatibel bleibt.
+      if (/^gpt-5/i.test(OPENAI_MODEL)) request.reasoning = { effort: "minimal" };
+      return openai.responses.create(request);
+    };
+
+    let response = await createInterpretation(firstBudget, false);
+    if (response.status === "incomplete" && response.incomplete_details?.reason === "max_output_tokens") {
+      console.warn("OpenAI response incomplete; retrying with larger output budget", {
+        spread: isFollowup ? "followup" : spread,
+        cardCount: cardsForPrompt.length,
+        firstBudget,
+        retryBudget,
+      });
+      response = await createInterpretation(retryBudget, true);
+    }
     if (response.status === "incomplete") {
       const reason = response.incomplete_details?.reason ?? "unbekannt";
       throw new Error(`Unvollständige Modellantwort: ${reason}`);
@@ -562,7 +594,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.4.7",
+      version: "1.4.8",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],
