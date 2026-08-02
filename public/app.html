@@ -22,7 +22,7 @@
   <main class="panel" id="root" aria-live="polite"></main>
   <div class="footer">Anbieter: Bertollo · <a href="/privacy">Datenschutz</a> · <a href="/terms">Nutzungsbedingungen</a> · <a href="/support">Support</a> · <a href="/imprint">Impressum</a></div>
 </div>
-<nav class="bottom-nav" aria-label="Hauptnavigation"><button id="navHome" class="active"><span>✦</span>Start</button><button id="navReadings"><span>▱</span>Legungen</button><button id="navSettings"><span>⚙</span>Einstellungen</button><button id="navMore"><span>☾</span>Mehr</button></nav>
+<nav class="bottom-nav" aria-label="Hauptnavigation"><button type="button" id="navHome" class="active" data-nav="home"><span>✦</span>Start</button><button type="button" id="navReadings" data-nav="history"><span>▱</span>Legungen</button><button type="button" id="navSettings" data-nav="settings"><span>⚙</span>Einstellungen</button><button type="button" id="navMore" data-nav="more"><span>☾</span>Mehr</button></nav>
 <script>
 const layoutIcons={daily:'☀',three:'▱',yesno:'☾?',cross:'✥',celtic:'✣',own:'✋'};
 const layouts={
@@ -34,7 +34,7 @@ const layouts={
  own:{title:'Eigene Karten',sub:'Physisch gelegte Karten eingeben',count:3,positions:[]}
 };
 let CARDS=[];
-const state={screen:'home',layout:null,question:'',drawn:[],mode:null,deck:[],selected:[],ownCount:3,ownCards:[],ownType:'three',ownText:'',answer:null,followupInput:'',followupFlow:null,followupResult:null,currentHistoryId:null,auth:{checked:false,required:true,authenticated:false,message:'',error:''}};
+const state={screen:'home',layout:null,question:'',drawn:[],mode:null,deck:[],selected:[],ownCount:3,ownCards:[],ownType:'three',ownText:'',answer:null,followupInput:'',followupFlow:null,followupResult:null,currentHistoryId:null,historySelectedId:null,auth:{checked:false,required:true,authenticated:false,message:'',error:''}};
 const root=document.getElementById('root');
 const SETTINGS_KEY='bertollo_tarot_settings_v1';
 const HISTORY_KEY='bertollo_tarot_history_v1';
@@ -42,21 +42,54 @@ const defaultSettings={responseLength:'medium',drawMode:'ask',saveHistory:true,m
 let settings=loadSettings();
 function loadSettings(){try{return {...defaultSettings,...JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}')}}catch{return {...defaultSettings}}}
 function saveSettings(){localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings));applySettings()}
-function getHistory(){try{const v=JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
-function setHistory(items){localStorage.setItem(HISTORY_KEY,JSON.stringify(items.slice(0,Math.max(1,Number(settings.maxHistory)||30))))}
+function normalizeHistoryItem(raw,index=0){
+  if(!raw||typeof raw!=='object')return null;
+  const cards=Array.isArray(raw.cards)?raw.cards.filter(Boolean).map((c,i)=>({name:String(c?.name||''),position:String(c?.position||`Position ${i+1}`)})).filter(c=>c.name):[];
+  const followups=Array.isArray(raw.followups)?raw.followups.filter(f=>f&&typeof f==='object').map(f=>({createdAt:f.createdAt||new Date().toISOString(),question:String(f.question||''),reading:f.reading&&typeof f.reading==='object'?f.reading:null})):[];
+  return {...raw,id:String(raw.id||`legacy-${index}-${Date.now()}`),createdAt:raw.createdAt||new Date().toISOString(),title:String(raw.title||'Tarotlegung'),question:String(raw.question||''),cards,reading:raw.reading&&typeof raw.reading==='object'?raw.reading:null,followups};
+}
+function getHistory(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
+    if(!Array.isArray(parsed))return [];
+    return parsed.map(normalizeHistoryItem).filter(Boolean)
+  }catch(error){console.warn('Lokaler Legungsverlauf konnte nicht gelesen werden.',error);return []}
+}
+function setHistory(items){
+  const safe=(Array.isArray(items)?items:[]).map(normalizeHistoryItem).filter(Boolean).slice(0,Math.max(1,Number(settings.maxHistory)||30));
+  localStorage.setItem(HISTORY_KEY,JSON.stringify(safe))
+}
+function deriveHistoryTitle(question,reading,fallback='Tarot-Thema'){
+  const ai=String(reading?.history_title||'').trim().replace(/[.!?]+$/,'');
+  if(ai)return ai.split(/\s+/).slice(0,4).join(' ');
+  const q=String(question||'').trim().replace(/[?!.,;:]+/g,' ').replace(/\s+/g,' ');
+  if(!q)return fallback;
+  const stop=new Set(['wie','was','wer','wo','wann','warum','wieso','weshalb','kann','könnte','wird','werden','soll','sollte','ich','du','er','sie','es','wir','ihr','mein','meine','meiner','meinem','meinen','mich','mir','der','die','das','den','dem','des','ein','eine','einer','einem','einen','und','oder','aber','mit','für','von','zu','im','in','am','an','auf','bei','über','sich','diese','dieser','dieses','jetzt','noch','weiter','entwickelt','entwicklung']);
+  const words=q.split(' ').filter(w=>w.length>2&&!stop.has(w.toLowerCase()));
+  const picked=words.slice(0,3);
+  return picked.length?picked.map(w=>w.charAt(0).toUpperCase()+w.slice(1)).join(' '):fallback
+}
+function historyDisplayTitle(item){return item.topicTitle||deriveHistoryTitle(item.question,item.reading,item.title||'Tarot-Thema')}
 function applySettings(){const app=document.querySelector('.app');if(!app)return;app.classList.toggle('font-large',settings.fontSize==='large');app.classList.toggle('reduce-motion',Boolean(settings.reduceMotion))}
 function updateNav(active){['navHome','navReadings','navSettings','navMore'].forEach(id=>document.getElementById(id)?.classList.toggle('active',id===active))}
-function saveReadingLocally(title,cards,reading){if(!settings.saveHistory||!reading)return null;const items=getHistory();const entry={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),createdAt:new Date().toISOString(),spread:state.layout||'own',title,question:state.question.trim(),cards:cards.map(c=>({name:c.name,position:c.position})),reading,followups:[]};items.unshift(entry);setHistory(items);return entry.id}
+function saveReadingLocally(title,cards,reading){if(!settings.saveHistory||!reading)return null;const items=getHistory();const question=state.question.trim();const entry={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),createdAt:new Date().toISOString(),spread:state.layout||'own',title,topicTitle:deriveHistoryTitle(question,reading,title),question,cards:cards.map(c=>({name:c.name,position:c.position})),reading,followups:[]};items.unshift(entry);setHistory(items);return entry.id}
 function saveFollowupLocally(question,reading){if(!settings.saveHistory||!state.currentHistoryId||!reading)return;const items=getHistory();const item=items.find(x=>x.id===state.currentHistoryId);if(!item)return;item.followups=Array.isArray(item.followups)?item.followups:[];item.followups.push({createdAt:new Date().toISOString(),question,reading});setHistory(items)}
 function formatLocalDate(value){try{return new Intl.DateTimeFormat('de-DE',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value))}catch{return value}}
 const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function loadCards(){const r=await fetch('/api/cards');if(!r.ok)throw new Error('Kartendeck konnte nicht geladen werden.');CARDS=(await r.json()).cards}
-function reset(){updateNav('navHome');Object.assign(state,{screen:'home',layout:null,question:'',drawn:[],mode:null,deck:[],selected:[],ownCount:3,ownCards:[],ownType:'three',ownText:'',answer:null,followupInput:'',followupFlow:null,followupResult:null,currentHistoryId:null});render()}
+function reset(){updateNav('navHome');Object.assign(state,{screen:'home',layout:null,question:'',drawn:[],mode:null,deck:[],selected:[],ownCount:3,ownCards:[],ownType:'three',ownText:'',answer:null,followupInput:'',followupFlow:null,followupResult:null,currentHistoryId:null,historySelectedId:null});render()}
 document.getElementById('home').onclick=reset;
-document.getElementById('navHome').onclick=reset;
-document.getElementById('navReadings').onclick=()=>{state.screen='history';render()};
-document.getElementById('navSettings').onclick=()=>{state.screen='settings';render()};
-document.getElementById('navMore').onclick=()=>{state.screen='more';render()};
+function openScreen(screen){
+  if(screen==='home'){reset();return}
+  state.screen=screen;
+  render()
+}
+document.addEventListener('click',event=>{
+  const button=event.target.closest('[data-nav]');
+  if(!button)return;
+  event.preventDefault();
+  openScreen(button.dataset.nav)
+});
 function render(){let out;if(state.screen==='history')out=historyScreen();else if(state.screen==='settings')out=settingsScreen();else if(state.screen==='more')out=moreScreen();else if(state.screen==='history-detail')out=historyDetail();else if(state.screen==='home')out=home();else if(state.layout==='own')out=own();else if(state.screen==='choose')out=choose();else out=reading();applySettings();queueMicrotask(installVoiceInputs);return out}
 function authBox(){
   const a=state.auth;
@@ -103,7 +136,7 @@ function bindAuth(){
 }
 function home(){updateNav('navHome');root.innerHTML=`<section class="hero"><div class="hero-moon">☾</div><h1>Bertollo–Raisch<br>Tarot</h1><p>Klarheit · Intuition · Erkenntnis</p></section><div class="ornament">— ✦ —</div>${authBox()}<p class="section-intro">Wähle deine Legung. Du kannst die Karten automatisch ziehen lassen oder sie mit ihrer echten Rückseite selbst verdeckt auswählen.</p><div class="grid">${Object.entries(layouts).map(([k,v])=>`<button class="option" data-k="${k}"><span class="option-icon">${layoutIcons[k]}</span><b>${v.title}</b><span>${v.sub}</span></button>`).join('')}</div><div class="moon-divider">☾ ◐ ● ◑ ☽</div><div class="safety">Tarot dient Unterhaltung und Selbstreflexion. Es ist keine sichere Vorhersage und ersetzt keine medizinische, psychologische, rechtliche oder finanzielle Beratung.</div><div class="status" id="status"></div>`;bindAuth();root.querySelectorAll('.option').forEach(b=>b.onclick=()=>{state.layout=b.dataset.k;state.screen='reading';state.drawn=[];state.mode=null;state.answer=null;if(b.dataset.k!=='own'&&settings.drawMode==='self'){prepareDeck();return}render();if(b.dataset.k!=='own'&&settings.drawMode==='auto')queueMicrotask(()=>document.getElementById('auto')?.click())})}
 function questionField(){return `<label class="label" for="q">Deine Frage oder dein Thema</label><textarea id="q" placeholder="Worum geht es bei dieser Legung?">${esc(state.question)}</textarea>`}
-function readingToContext(r){if(!r)return '';return [r.subject,...(r.positions||[]).map(p=>`${p.number}. ${p.position} – ${p.card}: ${p.interpretation}`),r.summary,r.overall_analysis,r.assessment,r.key_message,r.essence].filter(Boolean).join('\n')}
+function readingToContext(r){if(!r)return '';return [r.history_title?`Thema: ${r.history_title}`:'',r.subject,...(r.positions||[]).map(p=>`${p.number}. ${p.position} – ${p.card}: ${p.interpretation}`),r.summary,r.overall_analysis,r.assessment,r.key_message,r.essence].filter(Boolean).join('\n')}
 function completeReadingContext(){return [readingToContext(state.answer),state.followupResult?`Bisherige Folgekarte:\n${readingToContext(state.followupResult.reading)}`:''].filter(Boolean).join('\n\n')}
 function section(title,text,cls='reading-section'){return text?`<section class="${cls}"><h3>${esc(title)}</h3><p>${esc(text)}</p></section>`:''}
 function eligibleFollowupCards(){const usedIds=new Set((state.drawn||[]).map(c=>c.id).filter(v=>v!==undefined&&v!==null).map(String));const usedNames=new Set((state.drawn||[]).map(c=>String(c.name||'').toLowerCase()).filter(Boolean));return CARDS.filter(c=>!usedIds.has(String(c.id))&&!usedNames.has(String(c.name||'').toLowerCase()))}
@@ -111,9 +144,9 @@ function startFollowup(question){const q=String(question||'').trim();if(!q){cons
 function cancelFollowup(){state.followupFlow=null;render();queueMicrotask(()=>document.querySelector('.followup-box')?.scrollIntoView({behavior:'smooth',block:'center'}))}
 function prepareFollowupDeck(){const pool=eligibleFollowupCards();state.followupFlow={...state.followupFlow,step:'choose',deck:[...pool].sort(()=>Math.random()-.5),selected:null};render();queueMicrotask(()=>document.getElementById('followupChoice')?.scrollIntoView({behavior:'smooth',block:'start'}))}
 function chooseAutomaticFollowupCard(){const pool=eligibleFollowupCards();if(!pool.length)return;const card=pool[Math.floor(Math.random()*pool.length)];requestFollowupInterpretation(card)}
-function renderFollowupResult(){const fr=state.followupResult;if(!fr)return '';const r=fr.reading;const pos=(r.positions||[])[0];return `<section class="followup-card-result" id="followupResult"><div class="followup-card-head"><img src="${esc(fr.card.image_url)}" alt="${esc(fr.card.name)}"><div><h3>Folgekarte – ${esc(fr.card.name)}</h3><p><b>Folgefrage:</b> ${esc(fr.question)}</p>${pos?`<p style="margin-top:9px">${esc(pos.interpretation)}</p>`:''}</div></div><div class="followup-result-sections">${section('Wahrscheinlichste Deutung',r.summary)}${section('Gesamtbezug zur ursprünglichen Legung',r.overall_analysis)}${section('Einschätzung',r.assessment)}${section('Kernaussage',r.key_message)}${section('Essenz',r.essence,'essence')}${section('Reflexionsfrage',r.reflection_question)}<div class="followup-box"><h3>Weitere sinnvolle Folgefrage</h3><div class="followup-suggestion">${esc(r.suggested_followup)}</div><div class="actions"><button class="primary" id="useNextFollowup" type="button">Mit neuer Folgekarte auswerten</button></div></div></div></section>`}
+function renderFollowupResult(){const fr=state.followupResult;if(!fr)return '';const r=fr.reading;const pos=(r.positions||[])[0];return `<section class="followup-card-result" id="followupResult"><div class="followup-card-head"><img src="${esc(fr.card.image_url)}" alt="${esc(fr.card.name)}"><div><h3>Folgekarte – ${esc(fr.card.name)}</h3><p><b>Folgefrage:</b> ${esc(fr.question)}</p>${pos?`<p style="margin-top:9px">${esc(pos.interpretation)}</p>`:''}</div></div><div class="followup-result-sections">${section('Wahrscheinlichste Deutung',r.summary)}${section('Gesamtbezug zur ursprünglichen Legung',r.overall_analysis)}${section('Einschätzung',r.assessment)}${section('Kernaussage',r.key_message)}${section('Essenz',r.essence,'essence')}${section('Reflexionsfrage',r.reflection_question)}<div class="followup-box"><h3>Weitere Tarot-Folgefrage</h3><div class="followup-suggestion">${esc(r.suggested_followup)}</div><div class="actions"><button class="primary" id="useNextFollowup" type="button">Mit neuer Folgekarte auswerten</button></div></div></div></section>`}
 function renderFollowupFlow(){const f=state.followupFlow;if(!f)return '';if(f.step==='method')return `<div class="followup-choice" id="followupChoice"><h4>Wie möchtest du die Folgekarte ziehen?</h4><p class="sub">Für die Folgefrage wird genau eine neue Karte gezogen. Die ursprüngliche Legung bleibt als Kontext erhalten.</p><div class="actions"><button class="primary" id="followupAuto" type="button">Automatisch ziehen</button><button class="secondary" id="followupSelf" type="button">Verdeckt selbst auswählen</button><button class="secondary followup-cancel" id="followupCancel" type="button">Abbrechen</button></div></div>`;if(f.step==='choose')return `<div class="followup-choice" id="followupChoice"><h4>Wähle eine verdeckte Folgekarte</h4><p class="sub">Tippe auf eine der verbleibenden Karten. Die Karte wird danach aufgedeckt und zur Folgefrage gedeutet.</p><div class="backs">${f.deck.map((c,i)=>`<button class="back ${f.selected===i?'selected':''}" data-followup-index="${i}" data-label="${i+1}" aria-label="Verdeckte Folgekarte ${i+1}"></button>`).join('')}</div><div class="actions"><button class="primary" id="revealFollowup" ${Number.isInteger(f.selected)?'':'disabled'} type="button">Folgekarte aufdecken und deuten</button><button class="secondary" id="followupCancel" type="button">Abbrechen</button></div><div class="status" id="followupStatus"></div></div>`;return ''}
-function renderAnswer(){const r=state.answer;if(!r)return '';const positions=(r.positions||[]).map(p=>`<article class="position-reading"><h4>Position ${esc(p.number)} – ${esc(p.position)}</h4><div><b>${esc(p.card)}</b></div><p>${esc(p.interpretation)}</p></article>`).join('');return `<div class="reading-head"><h3>Worum es geht</h3><p>${esc(r.subject)}</p></div>${positions}${section('Zusammenfassung',r.summary)}${section('Gesamtanalyse',r.overall_analysis)}${section('Einschätzung',r.assessment)}${section('Kernaussage',r.key_message)}${section('Essenz',r.essence,'essence')}${section('Reflexionsfrage',r.reflection_question)}${renderFollowupResult()}<div class="followup-box"><h3>Sinnvolle Folgefrage</h3><div class="followup-suggestion">${esc(r.suggested_followup)}</div><div class="actions"><button class="primary" id="useFollowup" type="button">Diese Folgefrage mit einer Karte auswerten</button></div><label class="label" for="customFollowup">Oder eigene Folgefrage</label><textarea id="customFollowup" placeholder="Eigene Folgefrage eingeben">${esc(state.followupInput)}</textarea><div class="actions"><button class="secondary" id="sendCustomFollowup" type="button">Eigene Folgefrage mit einer Karte auswerten</button></div><div class="followup-note">Für jede Folgefrage wird eine neue einzelne Karte gezogen. Die ursprüngliche Legung bleibt vollständig als Kontext erhalten.</div><div class="status" id="followupStatus"></div>${renderFollowupFlow()}</div>`}
+function renderAnswer(){const r=state.answer;if(!r)return '';const positions=(r.positions||[]).map(p=>`<article class="position-reading"><h4>Position ${esc(p.number)} – ${esc(p.position)}</h4><div><b>${esc(p.card)}</b></div><p>${esc(p.interpretation)}</p></article>`).join('');return `<div class="reading-head"><h3>Worum es geht</h3><p>${esc(r.subject)}</p></div>${positions}${section('Zusammenfassung',r.summary)}${section('Gesamtanalyse',r.overall_analysis)}${section('Einschätzung',r.assessment)}${section('Kernaussage',r.key_message)}${section('Essenz',r.essence,'essence')}${section('Reflexionsfrage',r.reflection_question)}${renderFollowupResult()}<div class="followup-box"><h3>Tarot-Folgefrage</h3><div class="followup-suggestion">${esc(r.suggested_followup)}</div><div class="actions"><button class="primary" id="useFollowup" type="button">Diese Folgefrage mit einer Karte auswerten</button></div><label class="label" for="customFollowup">Oder eigene Folgefrage</label><textarea id="customFollowup" placeholder="Eigene Folgefrage eingeben">${esc(state.followupInput)}</textarea><div class="actions"><button class="secondary" id="sendCustomFollowup" type="button">Eigene Folgefrage mit einer Karte auswerten</button></div><div class="followup-note">Für jede Folgefrage wird eine neue einzelne Karte gezogen. Die ursprüngliche Legung bleibt vollständig als Kontext erhalten.</div><div class="status" id="followupStatus"></div>${renderFollowupFlow()}</div>`}
 function bindAnswerActions(cards,title){if(!state.answer)return;const suggested=document.getElementById('useFollowup');if(suggested)suggested.onclick=()=>startFollowup(state.answer.suggested_followup);const input=document.getElementById('customFollowup');if(input)input.oninput=e=>state.followupInput=e.target.value;const own=document.getElementById('sendCustomFollowup');if(own)own.onclick=()=>startFollowup(state.followupInput);document.getElementById('followupAuto')?.addEventListener('click',chooseAutomaticFollowupCard);document.getElementById('followupSelf')?.addEventListener('click',prepareFollowupDeck);document.getElementById('followupCancel')?.addEventListener('click',cancelFollowup);document.querySelectorAll('[data-followup-index]').forEach(b=>b.onclick=()=>{state.followupFlow.selected=Number(b.dataset.followupIndex);render();queueMicrotask(()=>document.getElementById('followupChoice')?.scrollIntoView({block:'nearest'}))});document.getElementById('revealFollowup')?.addEventListener('click',()=>{const i=state.followupFlow?.selected;if(Number.isInteger(i))requestFollowupInterpretation(state.followupFlow.deck[i])});document.getElementById('useNextFollowup')?.addEventListener('click',()=>startFollowup(state.followupResult?.reading?.suggested_followup||''))}
 
 function reading(){updateNav('navHome');const l=layouts[state.layout];root.innerHTML=`<h2 class="screen-title">${l.title}</h2><div class="ornament">— ✦ —</div><p class="section-intro">${l.sub}</p>${questionField()}${!state.drawn.length?`<div class="actions"><button class="primary" id="auto">✦ Automatisch ziehen</button><button class="secondary" id="self">▱ Verdeckt selbst auswählen</button></div>`:`<div class="actions"><button class="secondary" id="again">Neu ziehen</button><button class="primary" id="interpret">Legung deuten</button></div>`}<div id="cards"></div><div class="status" id="status"></div><div class="answer" id="answer">${renderAnswer()}</div>`;document.getElementById('q').oninput=e=>state.question=e.target.value;if(!state.drawn.length){document.getElementById('auto').onclick=autoDraw;document.getElementById('self').onclick=startChoose}else{document.getElementById('again').onclick=()=>{state.drawn=[];state.answer=null;render()};document.getElementById('interpret').onclick=interpret}showCards();bindAnswerActions(state.drawn,l.title)}
@@ -165,6 +198,46 @@ function interpretOwn(){
   state.drawn=cards.map((c,i)=>({...c,id:'own-'+i}));
   requestInterpretation(cards,chosen.label+' – eigene physische Legung')
 }
+
+function storedCardImage(name){const card=CARDS.find(c=>String(c.name).toLowerCase()===String(name||'').toLowerCase());return card?.image_url||''}
+function storedSection(title,text,cls='reading-section'){return text?`<section class="${cls}"><h3>${esc(title)}</h3><p>${esc(text)}</p></section>`:''}
+function renderStoredReading(reading){
+  if(!reading)return '<p class="sub">Für diese Legung ist kein Deutungstext gespeichert.</p>';
+  const positions=(reading.positions||[]).map(p=>`<article class="position-reading"><h4>Position ${esc(p.number)} – ${esc(p.position)}</h4><div><b>${esc(p.card)}</b></div><p>${esc(p.interpretation)}</p></article>`).join('');
+  return `<div class="reading-head"><h3>Worum es geht</h3><p>${esc(reading.subject||'')}</p></div>${positions}${storedSection('Zusammenfassung',reading.summary)}${storedSection('Gesamtanalyse',reading.overall_analysis)}${storedSection('Einschätzung',reading.assessment)}${storedSection('Kernaussage',reading.key_message)}${storedSection('Essenz',reading.essence,'essence')}${storedSection('Reflexionsfrage',reading.reflection_question)}${storedSection('Sinnvolle Folgefrage',reading.suggested_followup)}`
+}
+function historyScreen(){
+  updateNav('navReadings');
+  let items=[];
+  try{items=getHistory()}catch(error){console.error('historyScreen load',error)}
+  try{
+    const listHtml=items.length?`<div class="history-list">${items.map((item,index)=>{
+      const cards=Array.isArray(item.cards)?item.cards:[];
+      const followups=Array.isArray(item.followups)?item.followups:[];
+      return `<article class="history-item"><h3>${esc(historyDisplayTitle(item))}</h3><div class="history-meta">${esc(item.title||'Tarotlegung')} · ${esc(formatLocalDate(item.createdAt))}</div><p>${esc(item.question||'Ohne angegebene Frage')}</p><div class="history-cards">${cards.map(c=>`${esc(c.position||'Position')}: <b>${esc(c.name||'Unbekannte Karte')}</b>`).join(' · ')}</div>${followups.length?`<div class="history-meta" style="margin-top:8px">${followups.length} gespeicherte Folgefrage${followups.length===1?'':'n'}</div>`:''}<div class="history-actions"><button class="primary" type="button" data-open-history="${esc(item.id)}">Öffnen</button><button class="secondary danger" type="button" data-delete-history="${esc(item.id)}">Löschen</button></div></article>`
+    }).join('')}</div><div class="actions"><button class="secondary danger" id="clearHistory" type="button">Alle Legungen löschen</button></div>`:`<div class="empty-state"><div style="font-size:38px;color:var(--gold2)">◇</div><h3>Noch keine Legungen gespeichert</h3><p>Eine erfolgreiche Deutung erscheint hier automatisch, sofern „Legungen lokal speichern“ aktiviert ist.</p></div>`;
+    root.innerHTML=`<h2 class="screen-title">Legungen</h2><div class="ornament">— ✦ —</div><p class="section-intro">${items.length} lokal gespeicherte ${items.length===1?'Legung':'Legungen'} auf diesem Gerät.</p>${!settings.saveHistory?'<div class="notice">Die lokale Speicherung ist in den Einstellungen ausgeschaltet. Bereits vorhandene Einträge bleiben erhalten.</div>':''}${listHtml}<div class="status" id="historyStatus"></div>`;
+  }catch(error){
+    console.error('historyScreen render',error);
+    root.innerHTML=`<h2 class="screen-title">Legungen</h2><div class="ornament">— ✦ —</div><div class="auth-error">Der lokale Verlauf konnte nicht vollständig dargestellt werden. Ein älterer Eintrag ist möglicherweise unvollständig.</div><div class="actions"><button class="secondary" type="button" id="repairHistory">Verlauf reparieren</button></div>`;
+    document.getElementById('repairHistory')?.addEventListener('click',()=>{setHistory(getHistory());historyScreen()});
+    return
+  }
+  root.querySelectorAll('[data-open-history]').forEach(button=>button.addEventListener('click',()=>{state.historySelectedId=button.dataset.openHistory;state.screen='history-detail';render()}));
+  root.querySelectorAll('[data-delete-history]').forEach(button=>button.addEventListener('click',()=>{if(!confirm('Diese Legung wirklich löschen?'))return;setHistory(getHistory().filter(x=>x.id!==button.dataset.deleteHistory));historyScreen()}));
+  document.getElementById('clearHistory')?.addEventListener('click',()=>{if(!confirm('Alle lokal gespeicherten Legungen löschen?'))return;setHistory([]);historyScreen()})
+}
+function historyDetail(){
+  updateNav('navReadings');
+  const item=getHistory().find(x=>x.id===state.historySelectedId);
+  if(!item){state.screen='history';historyScreen();return}
+  const cards=(item.cards||[]).map(c=>{const img=storedCardImage(c.name);return `<div class="card">${img?`<img src="${esc(img)}" alt="${esc(c.name)}" loading="lazy">`:''}<div class="card-name">${esc(c.position||'Position')}<br><b>${esc(c.name)}</b></div></div>`}).join('');
+  const followups=(item.followups||[]).map((f,i)=>{const card=f.reading?.followup_card;const img=card?storedCardImage(card.name):'';return `<section class="followup-card-result"><div class="followup-card-head">${img?`<img src="${esc(img)}" alt="${esc(card.name)}">`:''}<div><h3>Folgefrage ${i+1}${card?.name?' – '+esc(card.name):''}</h3><p>${esc(f.question||'')}</p><div class="history-meta">${esc(formatLocalDate(f.createdAt))}</div></div></div>${renderStoredReading(f.reading)}</section>`}).join('');
+  root.innerHTML=`<div class="actions" style="margin-top:0"><button class="secondary" id="backHistory" type="button">← Zurück zu Legungen</button></div><h2 class="screen-title">${esc(historyDisplayTitle(item))}</h2><div class="ornament">— ✦ —</div><div class="reading-head"><h3>Frage oder Thema</h3><p>${esc(item.question||'Ohne angegebene Frage')}</p><div class="history-meta">${esc(item.title||'Tarotlegung')} · ${esc(formatLocalDate(item.createdAt))}</div></div>${cards?`<div class="cards">${cards}</div>`:''}<div class="answer">${renderStoredReading(item.reading)}${followups}</div><div class="actions"><button class="secondary danger" id="deleteCurrentHistory" type="button">Diese Legung löschen</button></div>`;
+  document.getElementById('backHistory').onclick=()=>{state.screen='history';render()};
+  document.getElementById('deleteCurrentHistory').onclick=()=>{if(!confirm('Diese Legung wirklich löschen?'))return;setHistory(getHistory().filter(x=>x.id!==item.id));state.historySelectedId=null;state.screen='history';render()}
+}
+
 function settingsScreen(){
   updateNav('navSettings');root.innerHTML=`<h2 class="screen-title">Einstellungen</h2><div class="ornament">— ✦ —</div><div class="settings-list">
   <section class="setting-card"><div class="setting-row"><div><h3>Antwortlänge</h3><div class="sub">Bestimmt die Länge neuer Deutungen.</div></div><select id="responseLength"><option value="short">Kurz</option><option value="medium">Mittel</option><option value="long">Ausführlich</option></select></div></section>
@@ -180,7 +253,7 @@ function settingsScreen(){
   bind('responseLength','responseLength');bind('drawMode','drawMode');bind('saveHistory','saveHistory');bind('maxHistory','maxHistory',Number);bind('fontSize','fontSize');bind('reduceMotion','reduceMotion')
 }
 function moreScreen(){
- updateNav('navMore');root.innerHTML=`<h2 class="screen-title">Mehr</h2><div class="ornament">— ✦ —</div><div class="more-grid"><a class="more-link" href="/privacy"><b>Datenschutz</b><span>Wie Daten und Spracheingaben verarbeitet werden.</span></a><a class="more-link" href="/terms"><b>Nutzungsbedingungen</b><span>Hinweise zur privaten Nutzung.</span></a><a class="more-link" href="/support"><b>Support</b><span>Kontakt und Hilfe.</span></a><a class="more-link" href="/imprint"><b>Impressum</b><span>Anbieterinformationen.</span></a></div><div class="setting-card" style="margin-top:14px"><h3>App-Information</h3><p>Version <span class="badge">1.4.4</span></p><p class="sub">Legungen werden nur lokal gespeichert, sofern dies in den Einstellungen aktiviert ist. Fragen und Deutungen werden nicht dauerhaft auf dem App-Server gespeichert.</p><div class="actions"><button class="secondary danger" id="resetLocalData">Lokale App-Daten zurücksetzen</button></div></div>`;
+ updateNav('navMore');root.innerHTML=`<h2 class="screen-title">Mehr</h2><div class="ornament">— ✦ —</div><div class="more-grid"><a class="more-link" href="/privacy"><b>Datenschutz</b><span>Wie Daten und Spracheingaben verarbeitet werden.</span></a><a class="more-link" href="/terms"><b>Nutzungsbedingungen</b><span>Hinweise zur privaten Nutzung.</span></a><a class="more-link" href="/support"><b>Support</b><span>Kontakt und Hilfe.</span></a><a class="more-link" href="/imprint"><b>Impressum</b><span>Anbieterinformationen.</span></a></div><div class="setting-card" style="margin-top:14px"><h3>App-Information</h3><p>Version <span class="badge">1.4.7</span></p><p class="sub">Legungen werden nur lokal gespeichert, sofern dies in den Einstellungen aktiviert ist. Fragen und Deutungen werden nicht dauerhaft auf dem App-Server gespeichert.</p><div class="actions"><button class="secondary danger" id="resetLocalData">Lokale App-Daten zurücksetzen</button></div></div>`;
  document.getElementById('resetLocalData').onclick=()=>{if(confirm('Einstellungen und lokal gespeicherte Legungen auf diesem Gerät löschen?')){localStorage.removeItem(SETTINGS_KEY);localStorage.removeItem(HISTORY_KEY);settings=loadSettings();applySettings();reset()}}
 }
 function setStatus(t,error=false){const s=document.getElementById('status');if(s){s.className='status'+(error?' error':'');s.innerHTML=t}}

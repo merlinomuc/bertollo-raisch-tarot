@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.4" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.7" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -54,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.4", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.7", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -95,7 +95,7 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.4", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.7", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -234,6 +234,7 @@ const interpretationInstructions = `Du bist Bertollo–Raisch Tarot. Deute auf D
 
 Gib ausschließlich valides JSON zurück, ohne Markdown-Codeblock und ohne Text außerhalb des JSON. Verwende exakt diese Struktur:
 {
+  "history_title": "thematischer Titel der Legung in 1 bis 3 Wörtern",
   "subject": "Worum es bei der Legung geht, in 1–2 kurzen Sätzen",
   "positions": [
     {"number": 1, "position": "Positionsname", "card": "Kartenname", "interpretation": "knappe positionsbezogene Deutung"}
@@ -244,7 +245,7 @@ Gib ausschließlich valides JSON zurück, ohne Markdown-Codeblock und ohne Text 
   "key_message": "prägnante Kernaussage",
   "essence": "ein sehr kurzer Satz",
   "reflection_question": "eine konkrete Reflexionsfrage",
-  "suggested_followup": "genau eine sinnvolle Folgefrage"
+  "suggested_followup": "genau eine konkrete Tarot-Folgefrage, die mit genau einer neuen Karte vertieft werden kann"
 }
 
 Regeln zur Länge:
@@ -255,12 +256,17 @@ Regeln zur Länge:
 - essence genau ein kurzer Satz.
 - Keine Wiederholungen zwischen den Abschnitten.
 - Deute jede Karte exakt in ihrer gelieferten Position.
-- Bei Ja/Nein muss assessment mit „Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“ oder „Deutliches Nein“ beginnen und klarstellen, dass es nur eine Tendenz ist.`;
+- Bei Ja/Nein muss assessment mit „Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“ oder „Deutliches Nein“ beginnen und klarstellen, dass es nur eine Tendenz ist.
+- history_title besteht aus 1 bis 3 aussagekräftigen Wörtern und benennt das konkrete Thema, zum Beispiel „Beruflicher Umbruch“, „Familiäre Klärung“ oder „Neue Beziehung“. Verwende nicht nur den Namen der Legungsart.
+- suggested_followup ist immer eine echte Tarot-Folgefrage für genau eine weitere Karte. Sie muss aus der konkreten Legung entstehen: bevorzuge die Abschluss- oder Zukunftsposition, eine dominante Große Arkana, eine auffällige Spannung oder einen noch unklaren Wendepunkt.
+- Formuliere suggested_followup so, dass die neue Karte etwas konkretisiert, zum Beispiel „Was zeigt sich nach dem Turm?“, „Welche Entwicklung eröffnet die Sonne in der Ergebnisposition?“ oder „Was muss verstanden werden, damit sich die Zwei der Schwerter lösen kann?“
+- Keine Chat-Assistenten-Fragen, keine Angebote wie „Soll ich dir helfen …?“ und keine allgemeinen Verhaltenstipps als Folgefrage.`;
 
 const followupInstructions = `Du deutest eine einzelne neue Folgekarte zu einer bereits bestehenden Tarotlegung. Beantworte ausschließlich die neue Folgefrage. Nutze die ursprüngliche Legung als Kontext und die neu gezogene Folgekarte als Fokus. Alle Karten sind aufrecht. Erfinde keine weiteren Karten oder Tatsachen. Schreibe knapp, psychologisch fundiert und ohne Garantien.
 
 Gib ausschließlich valides JSON zurück:
 {
+  "history_title": "kurzer thematischer Titel in 1 bis 3 Wörtern",
   "subject": "Folgefrage in eigenen Worten",
   "positions": [
     {"number": 1, "position": "Folgekarte", "card": "Name der neuen Folgekarte", "interpretation": "konkrete Deutung dieser Karte zur Folgefrage"}
@@ -271,11 +277,13 @@ Gib ausschließlich valides JSON zurück:
   "key_message": "prägnante Kernaussage",
   "essence": "ein kurzer Satz",
   "reflection_question": "eine konkrete Reflexionsfrage",
-  "suggested_followup": "genau eine weitere sinnvolle Folgefrage"
+  "suggested_followup": "genau eine weitere konkrete Tarot-Folgefrage für eine neue Karte"
 }
-Die Positionsdeutung höchstens 75 Wörter, jeder weitere längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.`;
+Die Positionsdeutung höchstens 75 Wörter, jeder weitere längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.
+Die weitere Folgefrage muss unmittelbar aus der neu gezogenen Folgekarte und dem noch offenen Punkt der ursprünglichen Legung entstehen. Sie soll einen konkreten Kartenprozess, eine Entwicklung oder eine auffällige Spannung vertiefen. Keine Chat-Assistenten-Angebote, keine organisatorischen Hilfsfragen und keine allgemeinen Ratschlagsfragen.`;
 
 type ReadingResult = {
+  history_title: string;
   subject: string;
   positions: Array<{ number: number; position: string; card: string; interpretation: string }>;
   summary: string;
@@ -290,8 +298,9 @@ type ReadingResult = {
 const readingJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["subject", "positions", "summary", "overall_analysis", "assessment", "key_message", "essence", "reflection_question", "suggested_followup"],
+  required: ["history_title", "subject", "positions", "summary", "overall_analysis", "assessment", "key_message", "essence", "reflection_question", "suggested_followup"],
   properties: {
+    history_title: { type: "string" },
     subject: { type: "string" },
     positions: {
       type: "array",
@@ -331,6 +340,7 @@ function parseReadingJson(text: string): ReadingResult {
     interpretation: stringValue(item?.interpretation),
   })).filter((item: any) => item.card || item.interpretation) : [];
   return {
+    history_title: stringValue(data.history_title),
     subject: stringValue(data.subject), positions,
     summary: stringValue(data.summary), overall_analysis: stringValue(data.overall_analysis),
     assessment: stringValue(data.assessment), key_message: stringValue(data.key_message),
@@ -552,7 +562,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.4.4",
+      version: "1.4.7",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],
