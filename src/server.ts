@@ -16,7 +16,7 @@ const cardById = new Map(cards.map((card) => [card.id, card]));
 const WIDGET_URI = "ui://widget/bertollo-raisch-tarot-v1.html";
 
 function createServer() {
-  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.8" });
+  const server = new McpServer({ name: "bertollo-raisch-tarot", version: "1.4.9" });
 
   server.registerResource(
     "bertollo-raisch-tarot-widget",
@@ -54,7 +54,7 @@ function createServer() {
     },
     async () => ({
       content: [{ type: "text", text: "Die Bertollo Tarot-App ist geöffnet. Wähle in der Oberfläche eine Legung." }],
-      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.8", language: "de", provider: "Bertollo", storesUserData: false },
+      structuredContent: { app: "bertollo-raisch-tarot", version: "1.4.9", language: "de", provider: "Bertollo", storesUserData: false },
       _meta: { "ui/resourceUri": WIDGET_URI, "openai/outputTemplate": WIDGET_URI }
     })
   );
@@ -95,7 +95,7 @@ app.get("/privacy", (_req, res) => res.type("html").sendFile(join(__dirname, "..
 app.get("/terms", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/terms.html")));
 app.get("/support", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/support.html")));
 app.get("/imprint", (_req, res) => res.type("html").sendFile(join(__dirname, "../public/imprint.html")));
-app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.8", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
+app.get("/health", (_req, res) => res.json({ ok: true, service: "bertollo-raisch-tarot", version: "1.4.9", aiConfigured: Boolean(process.env.OPENAI_API_KEY) }));
 
 
 const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -230,6 +230,16 @@ function consumeUsage(req: express.Request, res: express.Response) {
   return true;
 }
 
+function questionAnswerMode(question: string) {
+  const q = question.trim().toLowerCase().replace(/[?.!]+$/g, "");
+  if (!q) return "open";
+  // Offene W-Fragen dürfen nie künstlich in Ja/Nein gepresst werden.
+  if (/^(wie|was|welche|welcher|welches|warum|wieso|weshalb|wodurch|wohin|woher|wer|wen|wem|wo|wann)\b/.test(q)) return "open";
+  // Nur klar geschlossene Entscheidungsfragen bekommen eine Ja/Nein-Tendenz.
+  if (/^(ist|sind|war|waren|wird|werden|kann|können|könnte|könnten|soll|sollte|sollten|darf|dürfen|muss|müssen|hat|haben|kommt|kommen|bleibt|bleiben|geht|gehen|lohnt|lohnt sich|bekomme|bekommen|findet|finden|passt|passen|möchte|möchten|gibt)\b/.test(q)) return "closed";
+  return "open";
+}
+
 const interpretationInstructions = `Du bist Bertollo–Raisch Tarot. Deute auf Deutsch, psychologisch fundiert, klar, ehrlich und knapp. Alle Karten sind aufrecht. Keine Garantien, Wunschdeutungen, Angstmacherei oder unbegründeten Behauptungen über andere Personen. Tarot dient Unterhaltung und Selbstreflexion.
 
 Gib ausschließlich valides JSON zurück, ohne Markdown-Codeblock und ohne Text außerhalb des JSON. Verwende exakt diese Struktur:
@@ -256,11 +266,12 @@ Regeln zur Länge:
 - essence genau ein kurzer Satz.
 - Keine Wiederholungen zwischen den Abschnitten.
 - Deute jede Karte exakt in ihrer gelieferten Position.
-- Bei Ja/Nein muss assessment mit „Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“ oder „Deutliches Nein“ beginnen und klarstellen, dass es nur eine Tendenz ist.
+- Die Einschätzung muss immer die tatsächliche Fragestellung beantworten. Eine Ja/Nein-Einordnung („Eher Ja“, „Vorsichtiges Ja“, „Offen“, „Eher Nein“, „Deutliches Nein“) ist NUR erlaubt, wenn die konkrete Nutzerfrage wirklich als geschlossene Ja/Nein-Frage formuliert ist. Bei offenen Fragen wie „Wie entwickelt sich …?“, „Was zeigt sich …?“ oder „Welche Tendenz …?“ niemals ein künstliches Ja/Nein voranstellen; stattdessen die wahrscheinliche Richtung inhaltlich beschreiben.
 - history_title besteht aus 1 bis 3 aussagekräftigen Wörtern und benennt das konkrete Thema, zum Beispiel „Beruflicher Umbruch“, „Familiäre Klärung“ oder „Neue Beziehung“. Verwende nicht nur den Namen der Legungsart.
-- suggested_followup ist immer eine echte Tarot-Folgefrage für genau eine weitere Karte. Sie muss aus der konkreten Legung entstehen: bevorzuge die Abschluss- oder Zukunftsposition, eine dominante Große Arkana, eine auffällige Spannung oder einen noch unklaren Wendepunkt.
-- Formuliere suggested_followup so, dass die neue Karte etwas konkretisiert, zum Beispiel „Was zeigt sich nach dem Turm?“, „Welche Entwicklung eröffnet die Sonne in der Ergebnisposition?“ oder „Was muss verstanden werden, damit sich die Zwei der Schwerter lösen kann?“
-- Keine Chat-Assistenten-Fragen, keine Angebote wie „Soll ich dir helfen …?“ und keine allgemeinen Verhaltenstipps als Folgefrage.`;
+- suggested_followup ist immer eine echte Tarot-Folgefrage für genau eine weitere Karte und muss unmittelbar aus der ORIGINALFRAGE und dem wichtigsten noch offenen psychologischen Punkt der Legung entstehen.
+- Suche dafür zuerst nach dem Kernkonflikt: Schutzmauer/Abwehr, emotionaler Blockade, unausgesprochenem Bedürfnis, Projektion, Beziehungsmuster, Entscheidungspunkt oder Entwicklungshemmnis. Verknüpfe diesen Kern anschließend mit der dafür relevantesten Kartenposition.
+- Die Folgefrage soll einen Erkenntnisschritt tiefer gehen als die Hauptdeutung. Sie darf nicht beliebig nur einen Kartennamen aufgreifen und nicht bloß die Hauptfrage umformulieren.
+- Gute Form: eine konkrete offene Frage, die mit genau einer neuen Karte einen bislang ungeklärten Mechanismus, inneren Konflikt oder nächsten Entwicklungsschritt beleuchtet. Keine Chat-Assistenten-Fragen, keine Angebote wie „Soll ich dir helfen …?“ und keine allgemeinen Verhaltenstipps.`;
 
 const followupInstructions = `Du deutest eine einzelne neue Folgekarte zu einer bereits bestehenden Tarotlegung. Beantworte ausschließlich die neue Folgefrage. Nutze die ursprüngliche Legung als Kontext und die neu gezogene Folgekarte als Fokus. Alle Karten sind aufrecht. Erfinde keine weiteren Karten oder Tatsachen. Schreibe knapp, psychologisch fundiert und ohne Garantien.
 
@@ -280,7 +291,7 @@ Gib ausschließlich valides JSON zurück:
   "suggested_followup": "genau eine weitere konkrete Tarot-Folgefrage für eine neue Karte"
 }
 Die Positionsdeutung höchstens 75 Wörter, jeder weitere längere Abschnitt höchstens 90 Wörter. Keine Wiederholungen.
-Die weitere Folgefrage muss unmittelbar aus der neu gezogenen Folgekarte und dem noch offenen Punkt der ursprünglichen Legung entstehen. Sie soll einen konkreten Kartenprozess, eine Entwicklung oder eine auffällige Spannung vertiefen. Keine Chat-Assistenten-Angebote, keine organisatorischen Hilfsfragen und keine allgemeinen Ratschlagsfragen.`;
+Die weitere Folgefrage muss unmittelbar aus der ORIGINALFRAGE, dem psychologischen Kernkonflikt der ursprünglichen Legung und der neu gezogenen Folgekarte entstehen. Sie soll einen noch ungeklärten inneren Mechanismus, eine Schutzmauer, ein Bedürfnis, ein Beziehungsmuster, einen Entscheidungspunkt oder den nächsten Entwicklungsschritt vertiefen. Sie darf nicht willkürlich nur einen Kartennamen aufgreifen und nicht bloß die vorige Frage umformulieren. Keine Chat-Assistenten-Angebote, keine organisatorischen Hilfsfragen und keine allgemeinen Ratschlagsfragen.`;
 
 type ReadingResult = {
   history_title: string;
@@ -425,7 +436,10 @@ Deute genau diese neue Folgekarte in Bezug auf die Folgefrage und verbinde sie n
 ${lengthGuidance}`
     : `Legung: ${spreadTitle} (${spread})
 Frage/Thema: ${question || "Kein spezielles Thema"}
+Frageart: ${questionAnswerMode(question) === "closed" ? "klar geschlossene Ja/Nein-Frage" : "offene oder nicht eindeutig geschlossene Frage"}
 Alle Karten sind aufrecht.
+
+WICHTIG ZUR EINSCHÄTZUNG: ${questionAnswerMode(question) === "closed" ? "Eine vorsichtige Ja/Nein-Tendenz ist erlaubt, sofern sie inhaltlich aus den Karten folgt." : "Keine Ja/Nein-Formel verwenden. Die Tendenz direkt bezogen auf die konkrete Frage beschreiben."}
 
 Karten:
 ${cardsText}
@@ -594,7 +608,7 @@ app.get("/api/openapi.json", (req, res) => {
     openapi: "3.1.0",
     info: {
       title: "Bertollo–Raisch Tarot Karten-API",
-      version: "1.4.8",
+      version: "1.4.9",
       description: "Wählt ausschließlich aufrechte Karten aus dem eigenen 78-Karten-Deck von Bertollo aus. Es werden keine Fragen oder Legungen gespeichert.",
     },
     servers: [{ url: base }],
